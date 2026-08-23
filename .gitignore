@@ -1,0 +1,195 @@
+# ===============================
+# 1. Go 编译依赖与产物
+# ===============================
+
+# 可执行文件（编译后的二进制文件，通常与项目同名或自定义）
+# 代理项目编译后如果叫 proxy-sentinel.exe 或 proxy-sentinel，必须忽略
+/proxy-sentinel
+/proxy-sentinel.exe
+/proxy-sentinel-*
+
+# 依赖管理工具产生的文件
+# Go Modules 正常情况下只需提交 go.mod 和 go.sum，vendor 目录一般不提交
+/vendor/
+/vendor/pkg/
+
+# 测试编译产生的临时文件
+*.test
+*.test.exe
+*.out
+coverage.txt
+coverage.html
+
+# 性能分析文件（Go pprof 产生的采样数据）
+*.prof
+*.pprof
+cpu.out
+mem.out
+trace.out
+
+# 编译时生成的中间文件（通常由 go build -work 产生）
+go.work
+go.work.sum
+
+# ===============================
+# 2. 代理项目敏感的配置文件（重点）
+# ===============================
+
+# 忽略根目录下的运行时数据文件夹
+/data/
+
+# 忽略 cmd/sentinel 目录下的运行时数据文件夹
+/cmd/sentinel/data/
+
+# 直接忽略整个配置目录（如果包含敏感信息）
+/configs/local/
+/configs/dev/
+/configs/prod/
+
+# 忽略常见的配置文件格式（防止误提交 API Key、密码、Token）
+# 注意：如果仓库里需要有配置示例，请保留 config.example.yaml 这类文件
+*.conf
+*.config
+*.toml
+*.yaml
+*.yml
+*.json
+*.env
+*.env.local
+*.env.*.local
+
+# 特别针对代理项目：忽略包含监听端口、上游地址、认证信息的文件
+settings.yaml
+config.toml
+application.json
+.env
+.env.production
+
+# 但是建议提交一个 示例 配置文件，方便别人克隆后修改
+# 如果你有 config.example.yaml，请在上面加 ! 取反规则，例如：
+# !config.example.yaml
+# !settings.example.toml
+
+# ===============================
+# 3. 安全证书与密钥（极度重要）
+# ===============================
+
+# TLS/SSL 证书私钥（.key）以及公钥证书（.crt, .pem）
+# 代理项目常常需要 https 或 mTLS 证书，千万不能提交！
+*.pem
+*.crt
+*.cer
+*.key
+*.p12
+*.pfx
+*.jks
+
+# 如果证书存放在特定文件夹，直接整个忽略
+/certs/
+/ssl/
+/tls/
+
+# SSH 密钥（以防万一）
+*.pub
+*.private
+*.pem
+
+# ===============================
+# 4. 操作系统和 IDE 垃圾文件
+# ===============================
+
+# Windows 系统
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.lnk
+*.exe
+*.dll
+
+# Mac OS X
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+
+# JetBrains IDE (GoLand, IntelliJ)
+.idea/
+*.iml
+.vscode/
+.vscode-test/
+
+# VS Code (虽然你正在用，但团队协作时忽略个人配置)
+.vscode/
+*.code-workspace
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# ===============================
+# 5. 日志文件和临时数据
+# ===============================
+
+# 日志目录（代理项目运行时会产生大量访问日志，肯定不入库）
+/logs/
+/log/
+/*.log
+*.log.*
+
+# 临时文件目录
+/tmp/
+/temp/
+*.tmp
+
+# 运行时生成的 PID 文件
+*.pid
+
+# 代理缓存或本地数据库文件（如 BoltDB, SQLite 等）
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# ===============================
+# 6. 容器和编排相关（常见于代理部署）
+# ===============================
+
+# Docker 镜像构建产生的临时文件
+.dockerignore
+*.tar
+*.tar.gz
+
+# Helm Charts 依赖包（如果使用 k8s 部署代理）
+/charts/*.tgz
+
+# ===============================
+# 7. 其他：CI/CD 或 文档生成的临时文件
+# ===============================
+
+# 文档生成工具（如 godoc 生成的静态站点）
+/docs/_build/
+/docs/_site/
+
+# 覆盖率或测试报告
+/reports/
+/test_results/
+
+# 压缩包或下载的第三方依赖（如果手动下载了）
+*.zip
+*.tgz
+*.gz
+
+# ===============================
+# 8. 特别提醒：不要忽略这些文件！
+# ===============================
+
+# 以下文件默认被忽略了，需要手动取消注释（去掉 #）来确保它们被提交
+# !go.mod
+# !go.sum
+# !README.md
+# !.gitignore （本身）
+# !config.example.yaml
