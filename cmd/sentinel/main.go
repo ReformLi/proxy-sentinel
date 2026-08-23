@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -42,8 +43,14 @@ func main() {
 	} else {
 		log.Printf("⚠ 未加载 .env / .env.local（若已在项目根创建了这些文件，检查当前工作目录或文件名大小写）")
 	}
-	log.Printf("配置加载完成：监听 :%s，后端数=%d，策略=%s，代理Token数=%d",
-		cfg.Server.Port, len(cfg.Backends), cfg.Balancer.Strategy, len(cfg.Auth.ProxyTokens))
+	log.Printf("配置加载完成：监听 :%s，后端数=%d，策略=%s，代理Token数=%d，默认限流=%s",
+		cfg.Server.Port, len(cfg.Backends), cfg.Balancer.Strategy, len(cfg.Auth.ProxyTokens),
+		func() string {
+			if cfg.RateLimit.DefaultRPM > 0 {
+				return fmt.Sprintf("%d 次/分钟/Token", cfg.RateLimit.DefaultRPM)
+			}
+			return "关闭"
+		}())
 	for _, w := range cfgInfo.Warnings {
 		log.Printf("⚠ 配置告警: %s", w)
 	}
@@ -122,12 +129,17 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
+	// 先绑定端口再打"已启动"日志，避免绑定失败时日志自相矛盾
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("监听 %s 失败（端口被占用？）: %v", addr, err)
+	}
 	go func() {
-		log.Printf("Proxy Sentinel 已启动，监听 %s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("服务启动失败: %v", err)
 		}
 	}()
+	log.Printf("Proxy Sentinel 已启动，监听 %s", addr)
 
 	// 9. 优雅关闭
 	quit := make(chan os.Signal, 1)
@@ -184,7 +196,7 @@ func bootstrap(db *storage.DB, cfg *config.Config) error {
 		}
 		if !exists {
 			name := fmt.Sprintf("token-%d", i+1)
-			if err := db.AddToken(ctx, t, name); err != nil {
+			if err := db.AddToken(ctx, t, name, 0); err != nil {
 				return fmt.Errorf("创建 Token 失败: %w", err)
 			}
 			log.Printf("已初始化代理 Token [name=%s] [value=%s... (已截断，完整值请查看 config.yaml 或 PROXY_TOKENS)]",

@@ -101,17 +101,19 @@ func (db *DB) UserExists(ctx context.Context, username string) (bool, error) {
 }
 
 // ValidToken 校验代理 Token 是否有效（按哈希比对），有效时更新最后使用时间
-func (db *DB) ValidToken(ctx context.Context, token string) (bool, error) {
+// 返回 (tokenID, rateLimitRPM, 是否有效, 错误)；rate_limit_rpm=0 表示跟随全局默认
+func (db *DB) ValidToken(ctx context.Context, token string) (int64, int, bool, error) {
 	var id int64
-	err := db.QueryRowContext(ctx, `SELECT id FROM proxy_tokens WHERE token=?`, hashToken(token)).Scan(&id)
+	var rpm int
+	err := db.QueryRowContext(ctx, `SELECT id, rate_limit_rpm FROM proxy_tokens WHERE token=?`, hashToken(token)).Scan(&id, &rpm)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return 0, 0, false, nil
 	}
 	if err != nil {
-		return false, err
+		return 0, 0, false, err
 	}
 	_, _ = db.ExecContext(ctx, `UPDATE proxy_tokens SET last_used_at=CURRENT_TIMESTAMP WHERE id=?`, id)
-	return true, nil
+	return id, rpm, true, nil
 }
 
 // TokenExists 判断 Token 是否已存在（按哈希比对）
@@ -121,10 +123,91 @@ func (db *DB) TokenExists(ctx context.Context, token string) (bool, error) {
 	return n > 0, err
 }
 
-// AddToken 新增代理 Token（存哈希）
-func (db *DB) AddToken(ctx context.Context, token, name string) error {
-	_, err := db.ExecContext(ctx, `INSERT INTO proxy_tokens (token, name) VALUES (?, ?)`, hashToken(token), name)
+// AddToken 新增代理 Token（存哈希），rateLimitRPM=0 表示不限流（跟随全局默认）
+func (db *DB) AddToken(ctx context.Context, token, name string, rateLimitRPM int) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO proxy_tokens (token, name, rate_limit_rpm) VALUES (?, ?, ?)`,
+		hashToken(token), name, rateLimitRPM)
 	return err
+}
+
+// TokenInfo Token 管理列表项（不含 token 值本身，只返回元数据）
+type TokenInfo struct {
+	ID           int64      `json:"id"`
+	Name         string     `json:"name"`
+	RateLimitRPM int        `json:"rate_limit_rpm"`
+	CreatedAt    time.Time  `json:"created_at"`
+	LastUsedAt   *time.Time `json:"last_used_at"`
+}
+
+// ListTokens 列出全部代理 Token 元数据（按创建时间正序）
+func (db *DB) ListTokens(ctx context.Context) ([]TokenInfo, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT id, name, rate_limit_rpm, created_at, last_used_at FROM proxy_tokens ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TokenInfo
+	for rows.Next() {
+		var t TokenInfo
+		var lastUsed sql.NullTime
+		if err := rows.Scan(&t.ID, &t.Name, &t.RateLimitRPM, &t.CreatedAt, &lastUsed); err != nil {
+			return nil, err
+		}
+		if lastUsed.Valid {
+			u := lastUsed.Time
+			t.LastUsedAt = &u
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// GetToken 按 ID 查询单个 Token 元数据（不存在返回 nil）
+func (db *DB) GetToken(ctx context.Context, id int64) (*TokenInfo, error) {
+	var t TokenInfo
+	var lastUsed sql.NullTime
+	err := db.QueryRowContext(ctx,
+		`SELECT id, name, rate_limit_rpm, created_at, last_used_at FROM proxy_tokens WHERE id=?`, id).
+		Scan(&t.ID, &t.Name, &t.RateLimitRPM, &t.CreatedAt, &lastUsed)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lastUsed.Valid {
+		u := lastUsed.Time
+		t.LastUsedAt = &u
+	}
+	return &t, nil
+}
+
+// UpdateTokenMeta 更新 Token 名称与限流设置（空值表示不修改对应字段）
+func (db *DB) UpdateTokenMeta(ctx context.Context, id int64, name string, rateLimitRPM *int) error {
+	if name != "" && rateLimitRPM != nil {
+		_, err := db.ExecContext(ctx, `UPDATE proxy_tokens SET name=?, rate_limit_rpm=? WHERE id=?`, name, *rateLimitRPM, id)
+		return err
+	}
+	if name != "" {
+		_, err := db.ExecContext(ctx, `UPDATE proxy_tokens SET name=? WHERE id=?`, name, id)
+		return err
+	}
+	if rateLimitRPM != nil {
+		_, err := db.ExecContext(ctx, `UPDATE proxy_tokens SET rate_limit_rpm=? WHERE id=?`, *rateLimitRPM, id)
+		return err
+	}
+	return nil
+}
+
+// DeleteToken 删除（吊销）Token，返回是否确实删除了记录
+func (db *DB) DeleteToken(ctx context.Context, id int64) (bool, error) {
+	res, err := db.ExecContext(ctx, `DELETE FROM proxy_tokens WHERE id=?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // InsertAudit 记录审计事件

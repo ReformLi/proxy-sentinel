@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS proxy_tokens (
   token TEXT UNIQUE NOT NULL,
   name TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  last_used_at DATETIME
+  last_used_at DATETIME,
+  rate_limit_rpm INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_token ON proxy_tokens(token);
 
@@ -108,6 +109,36 @@ func Open(dbPath string) (*DB, error) {
 }
 
 func (db *DB) migrate() error {
-	_, err := db.Exec(schemaSQL)
+	if _, err := db.Exec(schemaSQL); err != nil {
+		return err
+	}
+	// 增量列迁移：CREATE TABLE IF NOT EXISTS 不会给已存在的表补列
+	return db.addColumnIfMissing("proxy_tokens", "rate_limit_rpm", "INTEGER DEFAULT 0")
+}
+
+// addColumnIfMissing 若表中不存在指定列则执行 ALTER TABLE ADD COLUMN
+func (db *DB) addColumnIfMissing(table, column, def string) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var dfltValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil // 已存在
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, def))
 	return err
 }

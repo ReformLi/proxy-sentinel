@@ -12,11 +12,12 @@ import (
 
 // settingsInfo GET /api/settings 响应结构
 type settingsInfo struct {
-	Backends []proxy.BackendStat `json:"backends"`
-	Strategy string              `json:"strategy"`
-	Log      logSettings         `json:"log"`
-	Proxy    proxySettings       `json:"proxy"`
-	Managed  bool                `json:"managed"` // 后端列表是否由数据库持久化管理（优先于 config.yaml）
+	Backends  []proxy.BackendStat `json:"backends"`
+	Strategy  string              `json:"strategy"`
+	Log       logSettings         `json:"log"`
+	Proxy     proxySettings       `json:"proxy"`
+	RateLimit rateLimitSettings   `json:"rate_limit"`
+	Managed   bool                `json:"managed"` // 后端列表是否由数据库持久化管理（优先于 config.yaml）
 }
 
 type logSettings struct {
@@ -31,6 +32,10 @@ type proxySettings struct {
 	TimeoutSeconds        int  `json:"timeout_seconds"`
 	MaxBodyBytes          int  `json:"max_body_bytes"`
 	TrustForwardedHeaders bool `json:"trust_forwarded_headers"`
+}
+
+type rateLimitSettings struct {
+	DefaultRPM int `json:"default_rpm"` // 按 Token 的全局默认限流（0=关闭），在 config.yaml 修改后重启生效
 }
 
 type updateBackendsRequest struct {
@@ -55,6 +60,9 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 			TimeoutSeconds:        s.cfg.Proxy.TimeoutSeconds,
 			MaxBodyBytes:          s.cfg.Proxy.MaxBodyBytes,
 			TrustForwardedHeaders: s.cfg.Proxy.TrustForwardedHeaders,
+		},
+		RateLimit: rateLimitSettings{
+			DefaultRPM: s.cfg.RateLimit.DefaultRPM,
 		},
 		Managed: managedInDB,
 	})

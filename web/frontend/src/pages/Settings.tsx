@@ -176,6 +176,10 @@ export default function Settings() {
               <Row k="超时时间" v={`${info?.proxy.timeout_seconds ?? '—'} 秒`} />
               <Row k="最大请求体" v={fmtBytes(info?.proxy.max_body_bytes)} />
               <Row k="信任转发头 (XFF)" v={info?.proxy.trust_forwarded_headers ? '是' : '否'} />
+              <Row
+                k="默认限流（每 Token）"
+                v={info?.rate_limit.default_rpm ? `${info.rate_limit.default_rpm} 次/分钟` : '未启用'}
+              />
             </dl>
           </CardContent>
         </Card>

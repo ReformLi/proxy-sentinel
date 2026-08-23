@@ -13,13 +13,14 @@ import (
 
 // Config 全局配置
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Backends []string       `yaml:"backends"`
-	Balancer BalancerConfig `yaml:"balancer"`
-	Database DatabaseConfig `yaml:"database"`
-	Proxy    ProxyConfig    `yaml:"proxy"`
-	Auth     AuthConfig     `yaml:"auth"`
-	Log      LogConfig      `yaml:"log"`
+	Server    ServerConfig    `yaml:"server"`
+	Backends  []string        `yaml:"backends"`
+	Balancer  BalancerConfig  `yaml:"balancer"`
+	Database  DatabaseConfig  `yaml:"database"`
+	Proxy     ProxyConfig     `yaml:"proxy"`
+	Auth      AuthConfig      `yaml:"auth"`
+	Log       LogConfig       `yaml:"log"`
+	RateLimit RateLimitConfig `yaml:"rate_limit"`
 }
 
 type ServerConfig struct {
@@ -52,7 +53,12 @@ type LogConfig struct {
 	SampleRate    float64 `yaml:"sample_rate"`
 	RetentionDays int     `yaml:"retention_days"`
 	MaskSensitive bool    `yaml:"mask_sensitive"`
-	BodyMaxBytes  int     `yaml:"body_max_bytes"` // 日志记录的请求/响应体截断上限（字节）
+	BodyMaxBytes  int     `yaml:"body_max_bytes"` // 日志记录的请求/响应体截断上限
+}
+
+// RateLimitConfig 限流配置：按 Token 维度限制每分钟请求数
+type RateLimitConfig struct {
+	DefaultRPM int `yaml:"default_rpm"` // 全局默认值（次/分钟/Token），0 = 不限流
 }
 
 // LoadResult 描述配置加载过程，便于调用方打印诊断日志
@@ -269,6 +275,11 @@ func applyEnv(cfg *Config) {
 			cfg.Log.BodyMaxBytes = n
 		}
 	}
+	if v := os.Getenv("RATE_LIMIT_DEFAULT_RPM"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.RateLimit.DefaultRPM = n
+		}
+	}
 }
 
 // 已知占位/弱默认值黑名单：出现即视为致命错误（防止带默认密钥上线）
@@ -312,6 +323,9 @@ func (c *Config) validate() ([]string, error) {
 	}
 	if c.Log.SampleRate < 0 || c.Log.SampleRate > 1 {
 		return nil, fmt.Errorf("采样率必须在 0.0 ~ 1.0 之间")
+	}
+	if c.RateLimit.DefaultRPM < 0 {
+		return nil, fmt.Errorf("限流默认值 rate_limit.default_rpm 不能为负数")
 	}
 	if c.Log.BodyMaxBytes <= 0 {
 		c.Log.BodyMaxBytes = 64 * 1024

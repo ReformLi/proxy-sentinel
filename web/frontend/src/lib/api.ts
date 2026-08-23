@@ -42,6 +42,7 @@ export const api = {
     request<T>(path, { method: 'POST', body: body !== undefined ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PUT', body: body !== undefined ? JSON.stringify(body) : undefined }),
+  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 }
 
 // ---- 类型定义（与后端 JSON 字段对齐）----
@@ -141,5 +142,28 @@ export interface SettingsInfo {
     max_body_bytes: number
     trust_forwarded_headers: boolean
   }
+  rate_limit: {
+    default_rpm: number
+  }
   managed: boolean
+}
+
+export interface TokenInfo {
+  id: number
+  name: string
+  rate_limit_rpm: number
+  created_at: string
+  last_used_at: string | null
+}
+
+export interface TokenListData {
+  tokens: TokenInfo[] | null
+  default_rpm: number
+}
+
+export interface CreatedToken {
+  message: string
+  token: string
+  name: string
+  rate_limit_rpm: number
 }

@@ -36,7 +36,7 @@ func (m *ProxyAuthMiddleware) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		valid, err := m.db.ValidToken(r.Context(), token)
+		tokenID, rpm, valid, err := m.db.ValidToken(r.Context(), token)
 		if err != nil {
 			http.Error(w, `{"error":"token validation failed"}`, http.StatusInternalServerError)
 			return
@@ -47,6 +47,8 @@ func (m *ProxyAuthMiddleware) Middleware(next http.Handler) http.Handler {
 		}
 
 		ctx := context.WithValue(r.Context(), tokenKey{}, token)
+		ctx = context.WithValue(ctx, tokenIDKey{}, tokenID)
+		ctx = context.WithValue(ctx, tokenRPMKey{}, rpm)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -59,4 +61,22 @@ func TokenFromContext(ctx context.Context) string {
 	return ""
 }
 
+// TokenIDFromContext 从上下文取出已认证 Token 的数据库 ID（限流计数键）
+func TokenIDFromContext(ctx context.Context) int64 {
+	if v, ok := ctx.Value(tokenIDKey{}).(int64); ok {
+		return v
+	}
+	return 0
+}
+
+// TokenRPMFromContext 从上下文取出该 Token 的独立限流值（0=跟随全局默认）
+func TokenRPMFromContext(ctx context.Context) int {
+	if v, ok := ctx.Value(tokenRPMKey{}).(int); ok {
+		return v
+	}
+	return 0
+}
+
 type tokenKey struct{}
+type tokenIDKey struct{}
+type tokenRPMKey struct{}

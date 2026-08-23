@@ -11,6 +11,7 @@ import (
 	"proxy-sentinel/internal/config"
 	"proxy-sentinel/internal/logger"
 	"proxy-sentinel/internal/proxy"
+	"proxy-sentinel/internal/ratelimit"
 	"proxy-sentinel/internal/stats"
 	"proxy-sentinel/internal/storage"
 	"proxy-sentinel/web"
@@ -30,6 +31,8 @@ type Server struct {
 	proxyH     *proxy.Handler
 	cfg        *config.Config
 	loginLimit *loginLimiter
+	limiter    *ratelimit.Limiter
+	stopLimiterSweep func()
 	adminUser  string
 	secure     bool
 }
@@ -50,7 +53,8 @@ func NewServer(
 	adminUser string,
 	secure bool,
 ) *Server {
-	return &Server{
+	limiter := ratelimit.NewLimiter(time.Minute)
+	s := &Server{
 		db:         db,
 		jwtMgr:     jwtMgr,
 		webAuth:    webAuth,
@@ -63,9 +67,12 @@ func NewServer(
 		proxyH:     proxyH,
 		cfg:        cfg,
 		loginLimit: newLoginLimiter(5, 15*60),
+		limiter:    limiter,
 		adminUser:  adminUser,
 		secure:     secure,
 	}
+	s.stopLimiterSweep = limiter.StartSweeper(10 * time.Minute)
+	return s
 }
 
 // spaIndex 返回前端 SPA 入口页（带基础缓存头）
@@ -109,6 +116,7 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("GET /dashboard", webPage(spa))
 	mux.Handle("GET /logs", webPage(spa))
 	mux.Handle("GET /flow", webPage(spa))
+	mux.Handle("GET /tokens", webPage(spa))
 	mux.Handle("GET /settings", webPage(spa))
 
 	// 受 WebAuth 保护的 API（返回 JSON 401）
@@ -127,8 +135,14 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("GET /api/settings", webJSON(http.HandlerFunc(s.getSettings)))
 	mux.Handle("PUT /api/settings/backends", webJSON(http.HandlerFunc(s.updateBackends)))
 
-	// 反向代理路由（Bearer Token 认证）
-	mux.Handle("/proxy/", s.proxyAuth.Middleware(s.proxyH))
+	// Token 管理（写操作审计）
+	mux.Handle("GET /api/tokens", webJSON(http.HandlerFunc(s.listTokens)))
+	mux.Handle("POST /api/tokens", webJSON(http.HandlerFunc(s.createToken)))
+	mux.Handle("PUT /api/tokens/{id}", webJSON(http.HandlerFunc(s.updateToken)))
+	mux.Handle("DELETE /api/tokens/{id}", webJSON(http.HandlerFunc(s.deleteToken)))
+
+	// 反向代理路由（Bearer Token 认证 + 按 Token 限流）
+	mux.Handle("/proxy/", s.proxyAuth.Middleware(s.rateLimitMiddleware(s.proxyH)))
 
 	return accessLogger(mux)
 }
@@ -188,4 +202,7 @@ func (s *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // Close 释放 Server 持有的后台资源
 func (s *Server) Close() {
 	s.loginLimit.Stop()
+	if s.stopLimiterSweep != nil {
+		s.stopLimiterSweep()
+	}
 }
