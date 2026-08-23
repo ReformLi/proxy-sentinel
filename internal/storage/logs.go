@@ -35,9 +35,10 @@ type LogFilter struct {
 	StatusMin   int
 	StatusMax   int
 	MinDuration int64
-	Keyword    string // 在请求体/响应体中搜索
+	Keyword     string // 在请求体/响应体中搜索
+	Backend     string // 精确匹配后端地址（流向图下钻）
 	Page        int
-	PageSize   int
+	PageSize    int
 }
 
 // InsertLog 插入一条日志记录（供 logger 异步写入调用）
@@ -50,6 +51,35 @@ func (db *DB) InsertLog(ctx context.Context, r *LogRecord) error {
 		r.ClientIP, r.UserAgent, r.Referer, r.BackendURL, r.CreatedAt,
 	)
 	return err
+}
+
+// InsertLogs 批量插入日志（单事务提交，避免逐条 fsync 拖垮写入吞吐）
+func (db *DB) InsertLogs(ctx context.Context, recs []*LogRecord) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO proxy_logs
+		(method, path, query, request_headers, request_body, status, response_headers, response_body, duration, client_ip, user_agent, referer, backend_url, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?);`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	for _, r := range recs {
+		if _, err := stmt.ExecContext(ctx,
+			r.Method, r.Path, r.Query, r.RequestHeaders, r.RequestBody,
+			r.Status, r.ResponseHeaders, r.ResponseBody, r.Duration,
+			r.ClientIP, r.UserAgent, r.Referer, r.BackendURL, r.CreatedAt,
+		); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // CountLogs 统计符合过滤条件的日志总数
@@ -142,6 +172,10 @@ func buildWhere(f LogFilter) (string, []any) {
 	if f.Keyword != "" {
 		conds = append(conds, "(request_body LIKE ? OR response_body LIKE ?)")
 		args = append(args, "%"+f.Keyword+"%", "%"+f.Keyword+"%")
+	}
+	if f.Backend != "" {
+		conds = append(conds, "backend_url = ?")
+		args = append(args, f.Backend)
 	}
 	if len(conds) == 0 {
 		return "", nil

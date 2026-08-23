@@ -1,6 +1,6 @@
 // Package web 提供内嵌的静态前端资源。
-// 当前为最小可用 UI（登录页 + 仪表盘 + 日志查询 + 数据流向），
-// 后续可被 web/dist 下的 React 构建产物替换。
+// 前端源码位于 web/frontend（React 18 + Vite + Tailwind + ECharts），
+// 构建产物输出到 web/dist 并嵌入二进制，实现单文件部署。
 package web
 
 import (
@@ -9,19 +9,24 @@ import (
 	"net/http"
 )
 
-//go:embed static/*
-var staticFS embed.FS
+//go:embed all:dist
+var distFS embed.FS
 
-// Static 返回静态资源的 http.Handler（子路径挂载到根）
+// dist 返回构建产物子文件系统
+func dist() (fs.FS, error) {
+	return fs.Sub(distFS, "dist")
+}
+
+// Static 返回静态资源处理器（/assets/*、favicon 等）
 func Static() http.Handler {
-	sub, err := fs.Sub(staticFS, "static")
+	sub, err := dist()
 	if err != nil {
 		panic(err)
 	}
 	return http.FileServer(http.FS(sub))
 }
 
-// File 读取指定静态文件内容（用于直接返回页面 HTML）
-func File(name string) ([]byte, error) {
-	return staticFS.ReadFile("static/" + name)
+// Index 返回 SPA 入口 index.html（页面路由统一由前端接管）
+func Index() ([]byte, error) {
+	return distFS.ReadFile("dist/index.html")
 }

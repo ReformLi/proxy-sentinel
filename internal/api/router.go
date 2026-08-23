@@ -1,32 +1,37 @@
 package api
 
 import (
+	"bufio"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
 	"proxy-sentinel/internal/auth"
+	"proxy-sentinel/internal/config"
 	"proxy-sentinel/internal/logger"
 	"proxy-sentinel/internal/proxy"
 	"proxy-sentinel/internal/stats"
 	"proxy-sentinel/internal/storage"
+	"proxy-sentinel/web"
 )
 
 // Server 装配所有依赖，提供 HTTP 处理器
 type Server struct {
-	db        *storage.DB
-	jwtMgr    *auth.JWTManager
-	webAuth   *auth.WebAuthMiddleware
-	proxyAuth *auth.ProxyAuthMiddleware
-	realtime  *stats.RealtimeService
-	trend     *stats.TrendService
-	flow      *stats.FlowService
-	logWriter *logger.Writer
-	balancer  proxy.Balancer
-	proxyH    *proxy.Handler
+	db         *storage.DB
+	jwtMgr     *auth.JWTManager
+	webAuth    *auth.WebAuthMiddleware
+	proxyAuth  *auth.ProxyAuthMiddleware
+	realtime   *stats.RealtimeService
+	trend      *stats.TrendService
+	flow       *stats.FlowService
+	logWriter  *logger.Writer
+	balancer   proxy.DynamicManager
+	proxyH     *proxy.Handler
+	cfg        *config.Config
 	loginLimit *loginLimiter
-	adminUser string
-	secure    bool
+	adminUser  string
+	secure     bool
 }
 
 // NewServer 创建 API Server
@@ -39,8 +44,9 @@ func NewServer(
 	trend *stats.TrendService,
 	flow *stats.FlowService,
 	logWriter *logger.Writer,
-	balancer proxy.Balancer,
+	balancer proxy.DynamicManager,
 	proxyH *proxy.Handler,
+	cfg *config.Config,
 	adminUser string,
 	secure bool,
 ) *Server {
@@ -55,10 +61,23 @@ func NewServer(
 		logWriter:  logWriter,
 		balancer:   balancer,
 		proxyH:     proxyH,
+		cfg:        cfg,
 		loginLimit: newLoginLimiter(5, 15*60),
 		adminUser:  adminUser,
 		secure:     secure,
 	}
+}
+
+// spaIndex 返回前端 SPA 入口页（带基础缓存头）
+func spaIndex(w http.ResponseWriter, r *http.Request) {
+	html, err := web.Index()
+	if err != nil {
+		http.Error(w, "前端资源缺失（请先构建 web/frontend）", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(html)
 }
 
 // Router 构建带认证中间件的路由
@@ -72,27 +91,41 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 
-	// 静态页面（无认证）
-	mux.HandleFunc("GET /login", servePage("login.html"))
+	// 前端静态资源（Vite 构建产物：/assets/*、favicon 等）
+	mux.Handle("GET /assets/", http.StripPrefix("/", web.Static()))
+	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		http.StripPrefix("/", web.Static()).ServeHTTP(w, r)
+	})
+
+	// 登录页（SPA 无认证路由）
+	mux.HandleFunc("GET /login", spaIndex)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/dashboard", http.StatusFound)
 	})
 
-	// 受 WebAuth 保护的浏览器页面（未登录跳转 /login）
+	// 受 WebAuth 保护的浏览器页面（未登录 302 跳转 /login）
 	webPage := s.webAuth.Middleware(false)
-	mux.Handle("GET /dashboard", webPage(http.HandlerFunc(servePage("index.html"))))
-	mux.Handle("GET /logs", webPage(http.HandlerFunc(servePage("logs.html"))))
-	mux.Handle("GET /flow", webPage(http.HandlerFunc(servePage("flow.html"))))
+	spa := http.HandlerFunc(spaIndex)
+	mux.Handle("GET /dashboard", webPage(spa))
+	mux.Handle("GET /logs", webPage(spa))
+	mux.Handle("GET /flow", webPage(spa))
+	mux.Handle("GET /settings", webPage(spa))
 
 	// 受 WebAuth 保护的 API（返回 JSON 401）
 	webJSON := s.webAuth.Middleware(true)
+	mux.Handle("GET /api/auth/me", webJSON(http.HandlerFunc(s.me)))
 	mux.Handle("GET /api/stats/realtime", webJSON(http.HandlerFunc(s.realtimeStats)))
 	mux.Handle("GET /api/stats/trend", webJSON(http.HandlerFunc(s.trendStats)))
 	mux.Handle("GET /api/stats/flow", webJSON(http.HandlerFunc(s.flowStats)))
+	mux.Handle("GET /api/stats/clients", webJSON(http.HandlerFunc(s.clientStats)))
 	mux.Handle("GET /api/logs", webJSON(http.HandlerFunc(s.listLogs)))
 	mux.Handle("GET /api/logs/stream", webJSON(http.HandlerFunc(s.streamLogs)))
 	mux.Handle("GET /api/logs/export", webJSON(http.HandlerFunc(s.exportCSV)))
 	mux.Handle("GET /api/logs/{id}", webJSON(http.HandlerFunc(s.getLog)))
+
+	// 配置管理（写操作审计）
+	mux.Handle("GET /api/settings", webJSON(http.HandlerFunc(s.getSettings)))
+	mux.Handle("PUT /api/settings/backends", webJSON(http.HandlerFunc(s.updateBackends)))
 
 	// 反向代理路由（Bearer Token 认证）
 	mux.Handle("/proxy/", s.proxyAuth.Middleware(s.proxyH))
@@ -135,4 +168,24 @@ func (s *statusWriter) Write(b []byte) (int, error) {
 		s.wroteHead = true
 	}
 	return s.ResponseWriter.Write(b)
+}
+
+// Flush 透传 Flush，保证 SSE/流式响应不被 accessLogger 包装后失效
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack 透传连接劫持，支持 WebSocket 升级等场景
+func (s *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
+}
+
+// Close 释放 Server 持有的后台资源
+func (s *Server) Close() {
+	s.loginLimit.Stop()
 }

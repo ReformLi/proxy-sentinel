@@ -2,8 +2,10 @@ package logger
 
 import (
 	"context"
+	"log"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"proxy-sentinel/internal/storage"
@@ -23,6 +25,8 @@ type Writer struct {
 
 	mu     sync.Mutex
 	buffer []*storage.LogRecord
+
+	seq int64 // 本地序号，用于 SSE 推送（数据库自增 ID 在批量落库前尚未生成）
 
 	flushCh chan struct{}
 
@@ -67,8 +71,10 @@ func (w *Writer) Write(rec *storage.LogRecord) {
 	needFlush := len(w.buffer) >= flushBatch
 	w.mu.Unlock()
 
-	// 实时广播给 SSE 订阅者
-	w.broadcast(rec)
+	// 广播副本：ID 使用本地序号（真实自增 ID 在批量落库后才产生）
+	broadcast := *rec
+	broadcast.ID = atomic.AddInt64(&w.seq, 1)
+	w.broadcast(&broadcast)
 
 	if needFlush {
 		select {
@@ -78,7 +84,7 @@ func (w *Writer) Write(rec *storage.LogRecord) {
 	}
 }
 
-// flush 将缓冲区批量写入数据库
+// flush 将缓冲区批量写入数据库（单事务提交，避免逐条 fsync）
 func (w *Writer) flush() {
 	w.mu.Lock()
 	if len(w.buffer) == 0 {
@@ -89,13 +95,11 @@ func (w *Writer) flush() {
 	w.buffer = nil
 	w.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	for _, rec := range batch {
-		if err := w.db.InsertLog(ctx, rec); err != nil {
-			// 写入失败不阻塞代理；丢弃该批次的后续错误继续尝试
-			continue
-		}
+	if err := w.db.InsertLogs(ctx, batch); err != nil {
+		// 写入失败不阻塞代理，整批丢弃并告警
+		log.Printf("日志批量写入失败（丢弃 %d 条）: %v", len(batch), err)
 	}
 }
 

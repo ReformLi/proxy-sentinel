@@ -1,11 +1,12 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -25,17 +26,21 @@ type Handler struct {
 	balancer     Balancer
 	logger       *logger.Writer
 	timeout      time.Duration
-	maxBodyBytes int64
+	maxBodyBytes int64     // 请求体大小上限（拒绝超限请求）
+	logBodyMax   int64     // 日志记录的请求/响应体截断上限（与 maxBodyBytes 独立，防止日志缓冲撑爆内存）
+	trustXFF     bool      // 是否信任入站 X-Forwarded-For/X-Real-IP（多级代理时开启）
 	transport    http.RoundTripper
 }
 
 // NewHandler 创建反向代理处理器
-func NewHandler(b Balancer, lw *logger.Writer, timeoutSec int, maxBodyBytes int64) *Handler {
+func NewHandler(b Balancer, lw *logger.Writer, timeoutSec int, maxBodyBytes, logBodyMax int64, trustXFF bool) *Handler {
 	return &Handler{
 		balancer:     b,
 		logger:       lw,
 		timeout:      time.Duration(timeoutSec) * time.Second,
 		maxBodyBytes: maxBodyBytes,
+		logBodyMax:   logBodyMax,
+		trustXFF:     trustXFF,
 		transport: &http.Transport{
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   20,
@@ -78,13 +83,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	rec := newResponseRecorder(w, h.maxBodyBytes)
+	// 日志缓冲使用独立的截断上限，避免大响应把内存撑爆
+	rec := newResponseRecorder(w, h.logBodyMax)
 
-	// 计算转发路径：剥离 /proxy 前缀
-	forwardPath := strings.TrimPrefix(r.URL.Path, pathPrefix)
-	if forwardPath == "" {
-		forwardPath = "/"
-	}
+	// 计算转发路径：剥离 /proxy 前缀，并保留 backend URL 自带的路径前缀
+	forwardPath := joinURLPath(target.Path, strings.TrimPrefix(r.URL.Path, pathPrefix))
+
+	// 在代理前确定客户端 IP（用于日志与 XFF），避免被伪造头污染
+	client := h.clientIP(r)
 
 	ctx, cancel := context.WithTimeout(r.Context(), h.timeout)
 	defer cancel()
@@ -95,9 +101,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.URL.Host = target.Host
 			req.URL.Path = forwardPath
 			req.Host = target.Host
-			// 保留原始查询参数
-			// X-Forwarded 头
-			req.Header.Set("X-Forwarded-For", clientIP(r))
+			// X-Forwarded 头：追加而非覆盖，保留可信的多级代理链
+			appendXFF(req, client, h.trustXFF)
 			req.Header.Set("X-Forwarded-Proto", scheme(r))
 			req.Header.Set("X-Forwarded-Host", r.Host)
 		},
@@ -118,18 +123,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 	proxy.ServeHTTP(rec, r)
 
-	// 记录日志
+	// 记录日志（请求体按日志上限截断存储）
 	h.logger.Write(&storage.LogRecord{
 		Method:          r.Method,
 		Path:            r.URL.Path,
 		Query:           r.URL.RawQuery,
 		RequestHeaders:  headersToJSON(r.Header),
-		RequestBody:     string(reqBody),
+		RequestBody:     truncateString(string(reqBody), h.logBodyMax),
 		Status:          rec.status,
 		ResponseHeaders: headersToJSON(rec.headers),
 		ResponseBody:    rec.body.String(),
 		Duration:        time.Since(start).Milliseconds(),
-		ClientIP:        clientIP(r),
+		ClientIP:        client,
 		UserAgent:       r.UserAgent(),
 		Referer:         r.Referer(),
 		BackendURL:      backend,
@@ -157,7 +162,7 @@ func newResponseRecorder(w http.ResponseWriter, maxBody int64) *responseRecorder
 	}
 }
 
-func (r *responseRecorder) setStatus(s int)        { r.status = s }
+func (r *responseRecorder) setStatus(s int)         { r.status = s }
 func (r *responseRecorder) setHeaders(h http.Header) { r.headers = h.Clone() }
 
 func (r *responseRecorder) WriteHeader(code int) {
@@ -181,23 +186,67 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
-func clientIP(r *http.Request) string {
-	if v := r.Header.Get("X-Forwarded-For"); v != "" {
-		// 取第一个
-		if i := strings.IndexByte(v, ','); i >= 0 {
-			return strings.TrimSpace(v[:i])
+// Flush 透传 Flush，保证 SSE / 大文件流式下载不被日志记录器破坏
+func (r *responseRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack 透传连接劫持，支持 WebSocket 升级等场景
+func (r *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := r.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
+}
+
+// clientIP 解析客户端 IP；仅当 trustXFF 开启时才信任入站转发头，防止伪造
+func (h *Handler) clientIP(r *http.Request) string {
+	if h.trustXFF {
+		if v := r.Header.Get("X-Forwarded-For"); v != "" {
+			// 取第一个（最原始来源）
+			if i := strings.IndexByte(v, ','); i >= 0 {
+				return strings.TrimSpace(v[:i])
+			}
+			return strings.TrimSpace(v)
 		}
-		return strings.TrimSpace(v)
+		if v := r.Header.Get("X-Real-IP"); v != "" {
+			return v
+		}
 	}
-	if v := r.Header.Get("X-Real-IP"); v != "" {
-		return v
-	}
-	// 去除端口
-	idx := strings.LastIndexByte(r.RemoteAddr, ':')
-	if idx > 0 {
-		return r.RemoteAddr[:idx]
+	return remoteIP(r)
+}
+
+// remoteIP 仅从 TCP 连接信息提取 IP（不信任任何请求头）；用 SplitHostPort 正确处理 IPv6
+func remoteIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
 	}
 	return r.RemoteAddr
+}
+
+// appendXFF 设置发往后端的 X-Forwarded-For：
+// 信任模式下追加（保留上游链路），否则直接覆盖为本连接 IP（清除伪造值）
+func appendXFF(req *http.Request, client string, trust bool) {
+	if trust {
+		if prior := req.Header.Get("X-Forwarded-For"); prior != "" {
+			req.Header.Set("X-Forwarded-For", prior+", "+client)
+			return
+		}
+	}
+	req.Header.Set("X-Forwarded-For", client)
+}
+
+// joinURLPath 拼接 backend 自带路径与转发路径，正确处理斜杠
+func joinURLPath(base, fwd string) string {
+	if fwd == "" {
+		fwd = "/"
+	}
+	if base == "" || base == "/" {
+		return fwd
+	}
+	return strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(fwd, "/")
 }
 
 func scheme(r *http.Request) string {
@@ -229,6 +278,13 @@ func headerMap(h http.Header) map[string]string {
 	return m
 }
 
+func truncateString(s string, max int64) string {
+	if int64(len(s)) <= max {
+		return s
+	}
+	return s[:max]
+}
+
 func min64(a, b int64) int64 {
 	if a < b {
 		return a
@@ -236,9 +292,11 @@ func min64(a, b int64) int64 {
 	return b
 }
 
+// writeJSONError 用 json.Marshal 序列化，避免消息含引号/换行时响应体断裂
 func writeJSONError(w http.ResponseWriter, code int, msg string) {
+	body, _ := json.Marshal(map[string]string{"error": msg})
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(msg)+12))
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(code)
-	fmt.Fprintf(w, `{"error":"%s"}`, msg)
+	w.Write(body)
 }

@@ -44,6 +44,9 @@ func main() {
 	}
 	log.Printf("配置加载完成：监听 :%s，后端数=%d，策略=%s，代理Token数=%d",
 		cfg.Server.Port, len(cfg.Backends), cfg.Balancer.Strategy, len(cfg.Auth.ProxyTokens))
+	for _, w := range cfgInfo.Warnings {
+		log.Printf("⚠ 配置告警: %s", w)
+	}
 
 	// 2. 打开数据库
 	absDBPath, err := absPath(cfg.Database.Path)
@@ -57,9 +60,21 @@ func main() {
 	}
 	defer db.Close()
 
-	// 3. 引导：创建管理员账号 + 初始化代理 Token
+	// 3. 引导：创建/更新管理员账号 + 初始化代理 Token（含旧明文 Token 哈希迁移）
+	if err := db.MigrateLegacyTokens(context.Background()); err != nil {
+		log.Fatalf("迁移旧明文 Token 失败: %v", err)
+	}
 	if err := bootstrap(db, cfg); err != nil {
 		log.Fatalf("初始化账号/Token 失败: %v", err)
+	}
+
+	// 3.5 数据库持久化的运行时设置覆盖配置文件（/settings 页面修改过的后端/策略优先）
+	if urls, ok, err := db.GetSettingBackends(context.Background()); err == nil && ok && len(urls) > 0 {
+		log.Printf("已加载数据库持久化的后端列表（%d 个，优先于 config.yaml）", len(urls))
+		cfg.Backends = urls
+	}
+	if v, ok, err := db.GetSetting(context.Background(), storage.SettingStrategy); err == nil && ok && v != "" {
+		cfg.Balancer.Strategy = v
 	}
 
 	// 4. 创建认证组件
@@ -77,7 +92,8 @@ func main() {
 	logWriter := logger.NewWriter(db, cfg.Log.SampleRate, cfg.Log.MaskSensitive)
 	defer logWriter.Close()
 
-	proxyHandler := proxy.NewHandler(balancer, logWriter, cfg.Proxy.TimeoutSeconds, int64(cfg.Proxy.MaxBodyBytes))
+	proxyHandler := proxy.NewHandler(balancer, logWriter, cfg.Proxy.TimeoutSeconds,
+		int64(cfg.Proxy.MaxBodyBytes), int64(cfg.Log.BodyMaxBytes), cfg.Proxy.TrustForwardedHeaders)
 
 	// 6. 统计服务 + API Server
 	realtimeSvc := stats.NewRealtimeService(db)
@@ -88,8 +104,9 @@ func main() {
 		db, jwtMgr, webAuth, proxyAuth,
 		realtimeSvc, trendSvc, flowSvc,
 		logWriter, balancer, proxyHandler,
-		cfg.Auth.AdminUsername, secure,
+		cfg, cfg.Auth.AdminUsername, secure,
 	)
+	defer server.Close()
 
 	// 7. 日志保留期清理（每小时检查一次过期数据）
 	stopRetention := startRetention(db, cfg.Log.RetentionDays)
@@ -126,15 +143,17 @@ func main() {
 	log.Println("服务已退出")
 }
 
-// bootstrap 初始化管理员账号与代理 Token（仅当不存在时创建）
+// bootstrap 初始化管理员账号与代理 Token：
+// - 管理员不存在则创建；已存在但密码与配置不一致则更新（改 config.yaml 后重启即生效）
+// - Token 不存在则创建
 func bootstrap(db *storage.DB, cfg *config.Config) error {
 	ctx := context.Background()
 	// 管理员
-	exists, err := db.UserExists(ctx, cfg.Auth.AdminUsername)
+	user, err := db.GetUserByUsername(ctx, cfg.Auth.AdminUsername)
 	if err != nil {
 		return fmt.Errorf("查询管理员失败: %w", err)
 	}
-	if !exists {
+	if user == nil {
 		hash, err := auth.HashPassword(cfg.Auth.AdminPassword)
 		if err != nil {
 			return fmt.Errorf("加密密码失败: %w", err)
@@ -143,6 +162,16 @@ func bootstrap(db *storage.DB, cfg *config.Config) error {
 			return fmt.Errorf("创建管理员失败: %w", err)
 		}
 		log.Printf("已创建管理员账号: %s", cfg.Auth.AdminUsername)
+	} else if !auth.CheckPassword(user.PasswordHash, cfg.Auth.AdminPassword) {
+		// 配置中的密码已变更：同步更新库中哈希
+		hash, err := auth.HashPassword(cfg.Auth.AdminPassword)
+		if err != nil {
+			return fmt.Errorf("加密密码失败: %w", err)
+		}
+		if err := db.UpdatePasswordHash(ctx, cfg.Auth.AdminUsername, hash); err != nil {
+			return fmt.Errorf("更新管理员密码失败: %w", err)
+		}
+		log.Printf("已根据配置更新管理员密码: %s", cfg.Auth.AdminUsername)
 	}
 	// 代理 Token
 	for i, t := range cfg.Auth.ProxyTokens {

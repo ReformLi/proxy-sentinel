@@ -19,7 +19,7 @@ type Config struct {
 	Database DatabaseConfig `yaml:"database"`
 	Proxy    ProxyConfig    `yaml:"proxy"`
 	Auth     AuthConfig     `yaml:"auth"`
-	Log      LogConfig       `yaml:"log"`
+	Log      LogConfig      `yaml:"log"`
 }
 
 type ServerConfig struct {
@@ -35,22 +35,24 @@ type DatabaseConfig struct {
 }
 
 type ProxyConfig struct {
-	TimeoutSeconds int `yaml:"timeout_seconds"`
-	MaxBodyBytes   int `yaml:"max_body_bytes"`
+	TimeoutSeconds      int  `yaml:"timeout_seconds"`
+	MaxBodyBytes        int  `yaml:"max_body_bytes"`        // 请求体大小上限（拒绝超限）
+	TrustForwardedHeaders bool `yaml:"trust_forwarded_headers"` // 是否信任入站 X-Forwarded-For（多级代理时开启，默认 false 防伪造）
 }
 
 type AuthConfig struct {
 	AdminUsername string   `yaml:"admin_username"`
 	AdminPassword string   `yaml:"admin_password"`
-	JWTSecret      string   `yaml:"jwt_secret"`
-	ProxyTokens    []string `yaml:"proxy_tokens"`
+	JWTSecret     string   `yaml:"jwt_secret"`
+	ProxyTokens   []string `yaml:"proxy_tokens"`
 }
 
 type LogConfig struct {
-	Level          string  `yaml:"level"`
-	SampleRate     float64 `yaml:"sample_rate"`
-	RetentionDays  int     `yaml:"retention_days"`
-	MaskSensitive  bool    `yaml:"mask_sensitive"`
+	Level         string  `yaml:"level"`
+	SampleRate    float64 `yaml:"sample_rate"`
+	RetentionDays int     `yaml:"retention_days"`
+	MaskSensitive bool    `yaml:"mask_sensitive"`
+	BodyMaxBytes  int     `yaml:"body_max_bytes"` // 日志记录的请求/响应体截断上限（字节）
 }
 
 // LoadResult 描述配置加载过程，便于调用方打印诊断日志
@@ -59,20 +61,16 @@ type LoadResult struct {
 	EnvFilesLoaded []string // 实际加载的 .env 文件列表（按加载顺序：.env.local → .env）
 	Backends       []string // 最终生效的后端列表（含环境变量覆盖后）
 	ProxyTokens    []string // 最终生效的代理 Token 值列表（原值，调用方自行脱敏后打印）
+	Warnings       []string // 非致命告警（弱密钥等）
 }
 
 // Load 从配置文件加载，再用环境变量覆盖；同时返回诊断信息
 // 环境变量加载顺序（后者优先）：进程已有环境变量 → .env → .env.local
-// 注意：godotenv 不会覆盖已存在的 shell 环境变量（Override=false），
-// 若要强制让 .env.local 覆盖 shell 变量，请通过 ENV_OVERRIDE=true 设置。
 func Load(path string) (*Config, *LoadResult, error) {
 	cfg := defaultConfig()
 	res := &LoadResult{}
 
 	// 0. 加载 .env / .env.local（仅当文件存在时）
-	// 优先级：进程已有的 shell 环境变量 > .env.local > .env
-	// Overload 会覆盖先载入的值，所以先 .env，再 .env.local（后者覆盖前者）。
-	// 不使用 Override 选项以兼容 godotenv v1.5.x 稳定 API。
 	for i, envFile := range []string{".env", ".env.local"} {
 		if p, ok := findFileUpwards(envFile); ok {
 			var err error
@@ -84,12 +82,10 @@ func Load(path string) (*Config, *LoadResult, error) {
 			if err == nil {
 				res.EnvFilesLoaded = append(res.EnvFilesLoaded, p)
 			}
-			// 忽略不存在或解析失败（.env 是可选增强）
 		}
 	}
 
 	// 1. 读取配置文件（可选）
-	// 先按用户传入路径精确读取；若找不到且是相对路径，再向上逐级查找（适配从 cmd/sentinel 启动的场景）
 	if path != "" {
 		data, resolvedPath, err := readConfigFile(path)
 		if err == nil {
@@ -105,10 +101,12 @@ func Load(path string) (*Config, *LoadResult, error) {
 	// 2. 环境变量覆盖
 	applyEnv(cfg)
 
-	// 3. 校验
-	if err := cfg.Validate(); err != nil {
+	// 3. 校验（收集告警但不中断）
+	warnings, err := cfg.validate()
+	if err != nil {
 		return nil, res, err
 	}
+	res.Warnings = warnings
 
 	// 4. 导出诊断信息
 	res.Backends = append([]string{}, cfg.Backends...)
@@ -129,7 +127,6 @@ func absOrDefault(p string) string {
 }
 
 // findFileUpwards 从当前工作目录开始向上查找 name 文件，找到返回绝对路径 + true
-// 目的：允许从 cmd/sentinel 子目录启动时仍能读到项目根的 .env / .env.local / config.yaml
 func findFileUpwards(name string) (string, bool) {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -151,8 +148,6 @@ func findFileUpwards(name string) (string, bool) {
 // readConfigFile 按以下顺序读取配置文件：
 //  1. 按传入 path 直接读（绝对/相对cwd）
 //  2. 若是相对路径且不存在，向上逐级查找同名文件
-//
-// 返回：文件内容、实际路径、错误（不存在时返回 os.ErrNotExist）
 func readConfigFile(path string) ([]byte, string, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -161,11 +156,9 @@ func readConfigFile(path string) ([]byte, string, error) {
 	if !os.IsNotExist(err) {
 		return nil, "", err
 	}
-	// 绝对路径找不到直接返回不存在
 	if filepath.IsAbs(path) {
 		return nil, "", err
 	}
-	// 相对路径：向上找
 	base := filepath.Base(path)
 	if resolved, ok := findFileUpwards(base); ok {
 		data, err := os.ReadFile(resolved)
@@ -183,19 +176,19 @@ func defaultConfig() *Config {
 		Balancer: BalancerConfig{Strategy: "round_robin"},
 		Database: DatabaseConfig{Path: "./data/sentinel.db"},
 		Proxy: ProxyConfig{
-			TimeoutSeconds: 30,
-			MaxBodyBytes:   10 * 1024 * 1024, // 10MB
+			TimeoutSeconds:        30,
+			MaxBodyBytes:          10 * 1024 * 1024, // 10MB
+			TrustForwardedHeaders: false,
 		},
 		Auth: AuthConfig{
 			AdminUsername: "admin",
-			AdminPassword: "change-me-please",
-			JWTSecret:      "change-this-to-a-random-secret",
 		},
 		Log: LogConfig{
 			Level:         "info",
 			SampleRate:    1.0,
 			RetentionDays: 30,
 			MaskSensitive: true,
+			BodyMaxBytes:  64 * 1024, // 64KB：日志缓冲独立上限，防止大响应撑爆内存
 		},
 	}
 }
@@ -206,7 +199,6 @@ func applyEnv(cfg *Config) {
 		cfg.Server.Port = v
 	}
 	if v := os.Getenv("BACKEND_URLS"); v != "" {
-		// 逗号分隔多个后端
 		parts := strings.Split(v, ",")
 		cfg.Backends = nil
 		for _, p := range parts {
@@ -229,6 +221,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("PROXY_MAX_BODY_BYTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Proxy.MaxBodyBytes = n
+		}
+	}
+	if v := os.Getenv("PROXY_TRUST_FORWARDED_HEADERS"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Proxy.TrustForwardedHeaders = b
 		}
 	}
 	if v := os.Getenv("ADMIN_USERNAME"); v != "" {
@@ -267,27 +264,60 @@ func applyEnv(cfg *Config) {
 			cfg.Log.MaskSensitive = b
 		}
 	}
+	if v := os.Getenv("LOG_BODY_MAX_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Log.BodyMaxBytes = n
+		}
+	}
 }
 
-// Validate 校验配置完整性
-func (c *Config) Validate() error {
+// 已知占位/弱默认值黑名单：出现即视为致命错误（防止带默认密钥上线）
+var weakSecrets = map[string]bool{
+	"change-me-please":              true,
+	"change-this-to-a-random-secret": true,
+	"secret":                        true,
+	"password":                      true,
+}
+
+// validate 校验配置：致命问题返回 error（阻止启动），弱配置仅收集为告警
+func (c *Config) validate() ([]string, error) {
+	var warnings []string
+
 	if len(c.Backends) == 0 {
-		return fmt.Errorf("必须配置至少一个后端地址（backends 或 BACKEND_URLS）")
+		return nil, fmt.Errorf("必须配置至少一个后端地址（backends 或 BACKEND_URLS）")
 	}
 	if len(c.Auth.ProxyTokens) == 0 {
-		return fmt.Errorf("必须配置至少一个代理 Token（auth.proxy_tokens 或 PROXY_TOKENS），否则所有 /proxy/* 请求都会 401")
+		return nil, fmt.Errorf("必须配置至少一个代理 Token（auth.proxy_tokens 或 PROXY_TOKENS），否则所有 /proxy/* 请求都会 401")
 	}
 	if c.Auth.JWTSecret == "" {
-		return fmt.Errorf("必须配置 JWT Secret（jwt_secret 或 JWT_SECRET）")
+		return nil, fmt.Errorf("必须配置 JWT Secret（jwt_secret 或 JWT_SECRET）")
+	}
+	if weakSecrets[strings.ToLower(c.Auth.JWTSecret)] {
+		return nil, fmt.Errorf("JWT Secret 使用了已知的弱默认值，请更换为随机强密钥（建议 ≥32 字符）")
+	}
+	if len(c.Auth.JWTSecret) < 16 {
+		warnings = append(warnings, fmt.Sprintf("JWT Secret 长度仅 %d 字符（建议 ≥32），存在被暴力破解风险", len(c.Auth.JWTSecret)))
 	}
 	if c.Auth.AdminPassword == "" {
-		return fmt.Errorf("必须配置管理员密码（admin_password 或 ADMIN_PASSWORD）")
+		return nil, fmt.Errorf("必须配置管理员密码（admin_password 或 ADMIN_PASSWORD）")
+	}
+	if weakSecrets[strings.ToLower(c.Auth.AdminPassword)] {
+		return nil, fmt.Errorf("管理员密码使用了已知的弱默认值，请更换强密码（建议 ≥12 字符，含大小写数字符号）")
+	}
+	if len(c.Auth.AdminPassword) < 8 {
+		warnings = append(warnings, fmt.Sprintf("管理员密码长度仅 %d 字符（建议 ≥12）", len(c.Auth.AdminPassword)))
 	}
 	if c.Balancer.Strategy != "round_robin" && c.Balancer.Strategy != "random" {
-		return fmt.Errorf("负载均衡策略非法：%s（仅支持 round_robin/random）", c.Balancer.Strategy)
+		return nil, fmt.Errorf("负载均衡策略非法：%s（仅支持 round_robin/random）", c.Balancer.Strategy)
 	}
 	if c.Log.SampleRate < 0 || c.Log.SampleRate > 1 {
-		return fmt.Errorf("采样率必须在 0.0 ~ 1.0 之间")
+		return nil, fmt.Errorf("采样率必须在 0.0 ~ 1.0 之间")
 	}
-	return nil
+	if c.Log.BodyMaxBytes <= 0 {
+		c.Log.BodyMaxBytes = 64 * 1024
+	}
+	if c.Proxy.MaxBodyBytes <= 0 {
+		c.Proxy.MaxBodyBytes = 10 * 1024 * 1024
+	}
+	return warnings, nil
 }

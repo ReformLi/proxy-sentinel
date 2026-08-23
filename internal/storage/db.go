@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   ip TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `
 
 // DB 封装数据库连接与查询

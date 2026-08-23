@@ -193,3 +193,15 @@ Desktop.ini
 # !README.md
 # !.gitignore （本身）
 # !config.example.yaml
+
+# ===============================
+# 9. 前端（web/frontend，React + Vite）
+# ===============================
+
+# 依赖目录（体积大，npm install 恢复）
+web/frontend/node_modules/
+
+# 上面的 *.json 规则会误伤前端工程文件，这里显式放行
+!web/frontend/package.json
+!web/frontend/package-lock.json
+!web/frontend/tsconfig.json

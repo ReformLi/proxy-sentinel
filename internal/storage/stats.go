@@ -51,6 +51,7 @@ type TrendPoint struct {
 	TS          time.Time `json:"ts"`
 	Count       int64     `json:"count"`
 	ErrorCount  int64     `json:"error_count"`
+	AvgDuration float64   `json:"avg_duration"`
 }
 
 // GetTrend 获取请求量与错误趋势（按指定时间桶聚合）
@@ -58,11 +59,19 @@ func (db *DB) GetTrend(ctx context.Context, from, to time.Time, bucketSeconds in
 	if bucketSeconds < 1 {
 		bucketSeconds = 60
 	}
-	bucketExpr := "(strftime('%s', created_at) / ?)"
+	// modernc.org/sqlite 将 time.Time 存为 "2006-01-02 15:04:05.999999999-07:00"，
+	// SQLite 日期函数无法解析纳秒小数与 ±HH:MM 后缀，直接 strftime 会得到 NULL。
+	// 处理：截取前 19 位（YYYY-MM-DD HH:MM:SS，本地墙上时间）按 UTC 解析出秒数，
+	// 再减去尾部时区偏移（±HH:MM），得到真实 UTC epoch 后分桶。
+	const tzHour = `CAST(substr(created_at, -6, 3) AS INTEGER)`
+	const tzMin = `CAST(substr(created_at, -2, 2) AS INTEGER)`
+	epochExpr := `(CAST(strftime('%s', substr(created_at, 1, 19)) AS INTEGER) - (` +
+		tzHour + ` * 3600 + (CASE WHEN ` + tzHour + ` >= 0 THEN 1 ELSE -1 END) * ` + tzMin + ` * 60))`
 	q := `SELECT ` +
-		bucketExpr + ` * ? AS bucket, ` +
+		epochExpr + ` / ? * ? AS bucket, ` +
 		`COUNT(*) AS cnt, ` +
-		`SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS err ` +
+		`SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS err, ` +
+		`COALESCE(AVG(duration), 0) AS avg_d ` +
 		`FROM proxy_logs WHERE created_at >= ? AND created_at <= ? ` +
 		`GROUP BY bucket ORDER BY bucket`
 
@@ -76,13 +85,15 @@ func (db *DB) GetTrend(ctx context.Context, from, to time.Time, bucketSeconds in
 	for rows.Next() {
 		var b int64
 		var cnt, errc int64
-		if err := rows.Scan(&b, &cnt, &errc); err != nil {
+		var avgd float64
+		if err := rows.Scan(&b, &cnt, &errc, &avgd); err != nil {
 			return nil, err
 		}
 		out = append(out, TrendPoint{
-			TS:         time.Unix(b, 0),
-			Count:      cnt,
-			ErrorCount: errc,
+			TS:          time.Unix(b, 0),
+			Count:       cnt,
+			ErrorCount:  errc,
+			AvgDuration: avgd,
 		})
 	}
 	return out, rows.Err()
@@ -96,36 +107,29 @@ type Percentiles struct {
 }
 
 // GetPercentiles 计算指定时间范围内的耗时 P50/P90/P99
+// 通过 COUNT + LIMIT/OFFSET 定位分位点，避免全量载入内存（大表下 OOM 风险）
 func (db *DB) GetPercentiles(ctx context.Context, from, to time.Time) (*Percentiles, error) {
-	// SQLite 无原生 percentile，使用排序 + 子集近似
-	rows, err := db.QueryContext(ctx, `SELECT duration FROM proxy_logs WHERE created_at >= ? AND created_at <= ? ORDER BY duration ASC`, from, to)
-	if err != nil {
+	var total int64
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM proxy_logs WHERE created_at >= ? AND created_at <= ?`, from, to).Scan(&total); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var ds []int64
-	for rows.Next() {
-		var d int64
-		if err := rows.Scan(&d); err != nil {
-			return nil, err
-		}
-		ds = append(ds, d)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(ds) == 0 {
+	if total == 0 {
 		return &Percentiles{}, nil
 	}
 	pick := func(p float64) float64 {
-		idx := int(float64(len(ds)-1) * p)
-		if idx < 0 {
-			idx = 0
+		offset := int64(float64(total-1) * p)
+		if offset < 0 {
+			offset = 0
 		}
-		if idx >= len(ds) {
-			idx = len(ds) - 1
+		var d int64
+		err := db.QueryRowContext(ctx,
+			`SELECT duration FROM proxy_logs WHERE created_at >= ? AND created_at <= ? ORDER BY duration ASC LIMIT 1 OFFSET ?`,
+			from, to, offset).Scan(&d)
+		if err != nil {
+			return 0
 		}
-		return float64(ds[idx])
+		return float64(d)
 	}
 	return &Percentiles{
 		P50: pick(0.50),
@@ -190,6 +194,40 @@ func (db *DB) GetTopPaths(ctx context.Context, from, to time.Time, limit int) ([
 			return nil, err
 		}
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// ClientBucket 客户端分布聚合项（按 IP 或 User-Agent）
+type ClientBucket struct {
+	Key   string `json:"key"`
+	Count int64  `json:"count"`
+}
+
+// GetClientDistribution 客户端分布（by: "ip" | "ua"）
+func (db *DB) GetClientDistribution(ctx context.Context, from, to time.Time, by string, limit int) ([]ClientBucket, error) {
+	if limit < 1 {
+		limit = 10
+	}
+	col := "client_ip"
+	if by == "ua" {
+		col = "user_agent"
+	}
+	q := `SELECT COALESCE(NULLIF(` + col + `, ''), 'unknown') AS k, COUNT(*) c
+		FROM proxy_logs WHERE created_at >= ? AND created_at <= ?
+		GROUP BY k ORDER BY c DESC LIMIT ?`
+	rows, err := db.QueryContext(ctx, q, from, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ClientBucket
+	for rows.Next() {
+		var b ClientBucket
+		if err := rows.Scan(&b.Key, &b.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
 	}
 	return out, rows.Err()
 }

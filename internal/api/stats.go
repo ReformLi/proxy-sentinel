@@ -2,6 +2,10 @@ package api
 
 import (
 	"net/http"
+	"time"
+
+	"proxy-sentinel/internal/stats"
+	"proxy-sentinel/internal/storage"
 )
 
 // realtimeStats GET /api/stats/realtime
@@ -40,4 +44,26 @@ func (s *Server) flowStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, nodes)
+}
+
+// clientStats GET /api/stats/clients?window=24h&by=ip|ua 客户端分布
+func (s *Server) clientStats(w http.ResponseWriter, r *http.Request) {
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "24h"
+	}
+	by := r.URL.Query().Get("by")
+	if by != "ua" {
+		by = "ip"
+	}
+	from, _ := stats.ParseWindow(window)
+	items, err := s.db.GetClientDistribution(r.Context(), from, time.Now(), by, 10)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "获取客户端分布失败: "+err.Error())
+		return
+	}
+	if items == nil {
+		items = []storage.ClientBucket{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"by": by, "items": items})
 }

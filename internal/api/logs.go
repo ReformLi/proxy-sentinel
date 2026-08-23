@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -24,6 +25,7 @@ func parseLogFilter(r *http.Request) storage.LogFilter {
 		Method:    q.Get("method"),
 		Path:      q.Get("path"),
 		Keyword:   q.Get("keyword"),
+		Backend:   q.Get("backend_url"),
 		Page:      atoiDefault(q.Get("page"), 1),
 		PageSize:  atoiDefault(q.Get("page_size"), 50),
 	}
@@ -132,8 +134,21 @@ func (s *Server) streamLogs(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			fmt.Fprintf(w, "data: {\"id\":%d,\"method\":\"%s\",\"path\":\"%s\",\"status\":%d,\"duration\":%d,\"backend_url\":\"%s\"}\n\n",
-				rec.ID, rec.Method, rec.Path, rec.Status, rec.Duration, rec.BackendURL)
+			// 用 json.Marshal 序列化，避免 path 等字段含引号/换行时破坏 JSON 结构
+			payload, err := json.Marshal(map[string]any{
+				"id":          rec.ID,
+				"method":      rec.Method,
+				"path":        rec.Path,
+				"status":      rec.Status,
+				"duration":    rec.Duration,
+				"backend_url": rec.BackendURL,
+				"client_ip":   rec.ClientIP,
+				"created_at":  rec.CreatedAt.Format(time.RFC3339),
+			})
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", payload)
 			flusher.Flush()
 		}
 	}
@@ -159,16 +174,28 @@ func (s *Server) exportCSV(w http.ResponseWriter, r *http.Request) {
 	for _, l := range logs {
 		_ = cw.Write([]string{
 			strconv.FormatInt(l.ID, 10),
-			l.Method,
-			l.Path,
-			l.Query,
+			sanitizeCSV(l.Method),
+			sanitizeCSV(l.Path),
+			sanitizeCSV(l.Query),
 			strconv.Itoa(l.Status),
 			strconv.FormatInt(l.Duration, 10),
-			l.ClientIP,
-			l.UserAgent,
-			l.BackendURL,
+			sanitizeCSV(l.ClientIP),
+			sanitizeCSV(l.UserAgent),
+			sanitizeCSV(l.BackendURL),
 			l.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	cw.Flush()
+}
+
+// sanitizeCSV 防止 CSV 公式注入：以 = + - @ 开头的单元格在 Excel 打开时会被当公式执行，加前缀使其成为纯文本
+func sanitizeCSV(s string) string {
+	if len(s) == 0 {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@':
+		return "'" + s
+	}
+	return s
 }

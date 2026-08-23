@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"sync"
@@ -11,11 +12,12 @@ import (
 
 // loginLimiter 防暴力破解：失败次数超限后锁定 IP 一段时间
 type loginLimiter struct {
-	mu         sync.Mutex
-	failures   map[string]int
+	mu          sync.Mutex
+	failures    map[string]int
 	lockedUntil map[string]time.Time
-	maxFail    int
-	lockDur    time.Duration
+	maxFail     int
+	lockDur     time.Duration
+	done        chan struct{}
 }
 
 func newLoginLimiter(maxFail int, lockSec int) *loginLimiter {
@@ -24,10 +26,14 @@ func newLoginLimiter(maxFail int, lockSec int) *loginLimiter {
 		lockedUntil: make(map[string]time.Time),
 		maxFail:     maxFail,
 		lockDur:     time.Duration(lockSec) * time.Second,
+		done:        make(chan struct{}),
 	}
 	go l.cleanup()
 	return l
 }
+
+// Stop 停止后台清理协程（由 Server.Close 调用）
+func (l *loginLimiter) Stop() { close(l.done) }
 
 // allowed 判断 IP 是否被锁定
 func (l *loginLimiter) allowed(ip string) bool {
@@ -66,16 +72,21 @@ func (l *loginLimiter) success(ip string) {
 func (l *loginLimiter) cleanup() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		l.mu.Lock()
-		now := time.Now()
-		for ip, until := range l.lockedUntil {
-			if now.After(until) {
-				delete(l.lockedUntil, ip)
-				delete(l.failures, ip)
+	for {
+		select {
+		case <-ticker.C:
+			l.mu.Lock()
+			now := time.Now()
+			for ip, until := range l.lockedUntil {
+				if now.After(until) {
+					delete(l.lockedUntil, ip)
+					delete(l.failures, ip)
+				}
 			}
+			l.mu.Unlock()
+		case <-l.done:
+			return
 		}
-		l.mu.Unlock()
 	}
 }
 
@@ -88,9 +99,17 @@ func ipFromRequest(r *http.Request) string {
 	return host
 }
 
+// dummyBcryptHash 用于用户不存在时的恒时比较，防止通过响应时间差枚举有效用户名
+const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+
 type loginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+// auditCtx 审计日志使用独立于请求生命周期的上下文，客户端提前断开也能落库
+func auditCtx(r *http.Request) context.Context {
+	return context.WithoutCancel(r.Context())
 }
 
 // login POST /api/auth/login
@@ -116,9 +135,17 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "内部错误")
 		return
 	}
-	if user == nil || !auth.CheckPassword(user.PasswordHash, req.Password) {
+	if user == nil {
+		// 用户不存在：仍执行一次 bcrypt 比较，消除与"密码错误"分支的耗时差
+		auth.CheckPassword(dummyBcryptHash, req.Password)
 		s.loginLimit.fail(ip)
-		auth.Audit(r.Context(), s.db, req.Username, "login_failed", ip)
+		auth.Audit(auditCtx(r), s.db, req.Username, "login_failed", ip)
+		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
+		return
+	}
+	if !auth.CheckPassword(user.PasswordHash, req.Password) {
+		s.loginLimit.fail(ip)
+		auth.Audit(auditCtx(r), s.db, req.Username, "login_failed", ip)
 		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
@@ -131,7 +158,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.webAuth.SetAuthCookie(w, token, expiresAt)
-	auth.Audit(r.Context(), s.db, user.Username, "login_success", ip)
+	auth.Audit(auditCtx(r), s.db, user.Username, "login_success", ip)
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message":  "登录成功",
 		"username": user.Username,
@@ -146,6 +173,6 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		username = "unknown"
 	}
 	s.webAuth.ClearAuthCookie(w)
-	auth.Audit(r.Context(), s.db, username, "logout", ipFromRequest(r))
+	auth.Audit(auditCtx(r), s.db, username, "logout", ipFromRequest(r))
 	writeJSON(w, http.StatusOK, map[string]string{"message": "已登出"})
 }
