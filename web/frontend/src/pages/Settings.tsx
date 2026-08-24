@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
-import { BellRing, Plus, RefreshCw, Save, Send, ShieldAlert, Trash2 } from 'lucide-react'
-import { api, type AlertConfigInfo, type AlertRules, type IPACLConfig, type IPACLDefault, type IPACLEntry, type IPACLMode, type SettingsInfo } from '@/lib/api'
+import { BellRing, GitBranch, Plus, RefreshCw, Save, Send, ShieldAlert, Trash2 } from 'lucide-react'
+import { api, type AlertConfigInfo, type AlertRules, type IPACLConfig, type IPACLDefault, type IPACLEntry, type IPACLMode, type RouteRule, type RouteRuleType, type SettingsInfo } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input, Select } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
-/** 配置管理：后端节点增删改（运行时生效 + 数据库持久化）、策略切换、只读运行参数 */
+/** 配置管理：后端节点/权重/策略/定向规则（运行时生效 + 数据库持久化）、只读运行参数 */
 export default function Settings() {
   const [info, setInfo] = useState<SettingsInfo | null>(null)
-  const [urls, setUrls] = useState<string[]>([])
+  const [rows, setRows] = useState<{ url: string; weight: number }[]>([])
   const [strategy, setStrategy] = useState('round_robin')
+  const [rules, setRules] = useState<RouteRule[]>([])
   const [newUrl, setNewUrl] = useState('')
   const [editing, setEditing] = useState<Record<number, string>>({})
   const [msg, setMsg] = useState('')
@@ -21,8 +22,9 @@ export default function Settings() {
       .get<SettingsInfo>('/api/settings')
       .then((d) => {
         setInfo(d)
-        setUrls((d.backends ?? []).map((b) => b.url))
+        setRows((d.backends ?? []).map((b) => ({ url: b.url, weight: b.weight ?? 1 })))
         setStrategy(d.strategy)
+        setRules(d.rules ?? [])
       })
       .catch(() => {})
   }, [])
@@ -43,20 +45,22 @@ export default function Settings() {
       setMsg('地址需以 http:// 或 https:// 开头')
       return
     }
-    if (urls.includes(u)) {
+    if (rows.some((r) => r.url === u)) {
       setMsg('该后端已存在')
       return
     }
-    setUrls([...urls, u])
+    setRows([...rows, { url: u, weight: 1 }])
     setNewUrl('')
     setMsg('')
   }
+
+  const totalWeight = rows.reduce((s, r) => s + (r.weight || 0), 0)
 
   const save = async () => {
     setSaving(true)
     setMsg('')
     try {
-      await api.put('/api/settings/backends', { backends: urls, strategy })
+      await api.put('/api/settings/backends', { backends: rows, strategy, rules })
       load()
       setMsg('已保存：立即生效，重启后保留')
     } catch (e) {
@@ -78,11 +82,11 @@ export default function Settings() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* 节点列表 */}
+          {/* 节点列表（含权重） */}
           <div className="space-y-2">
-            {urls.map((url, i) => {
-              const editing_ = editing[i] ?? url
-              const healthy = healthOf(url)
+            {rows.map((row, i) => {
+              const editing_ = editing[i] ?? row.url
+              const healthy = healthOf(row.url)
               return (
                 <div key={i} className="flex items-center gap-2">
                   <span
@@ -96,6 +100,21 @@ export default function Settings() {
                     onChange={(e) => setEditing((s) => ({ ...s, [i]: e.target.value }))}
                     className="flex-1 font-mono text-xs"
                   />
+                  <div className="flex shrink-0 items-center gap-1" title="权重 0~100，仅 weighted 策略生效；0 = 不接流量">
+                    <span className="text-xs text-muted-foreground">权重</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={row.weight}
+                      onChange={(e) =>
+                        setRows((s) =>
+                          s.map((x, j) => (j === i ? { ...x, weight: Math.min(100, Math.max(0, Number(e.target.value) || 0)) } : x)),
+                        )
+                      }
+                      className="w-20 text-xs"
+                    />
+                  </div>
                   <Button
                     size="icon"
                     variant="ghost"
@@ -110,13 +129,13 @@ export default function Settings() {
                   >
                     <RefreshCw className="h-4 w-4" />
                   </Button>
-                  <Button size="icon" variant="ghost" title="删除" onClick={() => setUrls(urls.filter((_, j) => j !== i))}>
+                  <Button size="icon" variant="ghost" title="删除" onClick={() => setRows(rows.filter((_, j) => j !== i))}>
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
                 </div>
               )
             })}
-            {urls.length === 0 && <p className="text-sm text-muted-foreground">暂无后端（保存前至少保留一个）</p>}
+            {rows.length === 0 && <p className="text-sm text-muted-foreground">暂无后端（保存前至少保留一个）</p>}
           </div>
 
           {/* 新增 */}
@@ -133,15 +152,86 @@ export default function Settings() {
             </Button>
           </div>
 
+          {/* 定向分流规则 */}
+          <div className="space-y-2 rounded-lg border p-3">
+            <div className="flex items-center gap-2">
+              <GitBranch className="h-4 w-4 text-indigo-500" />
+              <span className="text-sm font-semibold">定向分流规则（灰度发布）</span>
+              <span className="text-xs text-muted-foreground">
+                命中规则的请求固定路由到指定后端（优先于负载均衡），自上而下第一条命中生效
+              </span>
+            </div>
+            {rules.map((rule, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={rule.type}
+                  onChange={(e) =>
+                    setRules((s) => s.map((x, j) => (j === i ? { ...x, type: e.target.value as RouteRuleType } : x)))
+                  }
+                  className="w-28 text-xs"
+                >
+                  <option value="header">Header</option>
+                  <option value="cookie">Cookie</option>
+                  <option value="path">路径前缀</option>
+                </Select>
+                {rule.type !== 'path' ? (
+                  <Input
+                    placeholder={rule.type === 'header' ? 'Header 名（如 X-Gray）' : 'Cookie 名（如 beta）'}
+                    value={rule.key}
+                    onChange={(e) => setRules((s) => s.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))}
+                    className="w-44 font-mono text-xs"
+                  />
+                ) : null}
+                <Input
+                  placeholder={rule.type === 'path' ? '路径前缀（如 /api/v2/）' : '匹配值（精确匹配）'}
+                  value={rule.value}
+                  onChange={(e) => setRules((s) => s.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+                  className="w-52 font-mono text-xs"
+                />
+                <span className="text-xs text-muted-foreground">→</span>
+                <Select
+                  value={rule.backend}
+                  onChange={(e) => setRules((s) => s.map((x, j) => (j === i ? { ...x, backend: e.target.value } : x)))}
+                  className="min-w-40 flex-1 font-mono text-xs"
+                >
+                  <option value="">选择目标后端</option>
+                  {rows.map((r) => (
+                    <option key={r.url} value={r.url}>
+                      {r.url}
+                    </option>
+                  ))}
+                </Select>
+                <Button size="icon" variant="ghost" title="删除" onClick={() => setRules(rules.filter((_, j) => j !== i))}>
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
+            ))}
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setRules([...rules, { type: 'header', key: '', value: '', backend: '' }])}>
+                <Plus className="h-3.5 w-3.5" /> 添加规则
+              </Button>
+              {rules.length === 0 && <span className="text-xs text-muted-foreground">无规则：所有流量走负载均衡策略</span>}
+            </div>
+          </div>
+
           {/* 策略 + 保存 */}
-          <div className="flex items-center gap-3 border-t pt-4">
+          <div className="flex flex-wrap items-center gap-3 border-t pt-4">
             <span className="text-sm text-muted-foreground">负载均衡策略</span>
-            <Select value={strategy} onChange={(e) => setStrategy(e.target.value)} className="w-44">
+            <Select value={strategy} onChange={(e) => setStrategy(e.target.value)} className="w-52">
               <option value="round_robin">round_robin（轮询）</option>
               <option value="random">random（随机）</option>
+              <option value="weighted">weighted（加权随机·灰度）</option>
             </Select>
+            {strategy === 'weighted' && totalWeight > 0 && (
+              <span className="text-xs text-muted-foreground">
+                流量比例：{rows.filter((r) => r.weight > 0).map((r) => `${((r.weight / totalWeight) * 100).toFixed(1)}%`).join(' / ')}
+              </span>
+            )}
+            {strategy === 'weighted' && totalWeight === 0 && (
+              <span className="text-xs text-amber-600 dark:text-amber-400">weighted 策略要求至少一个后端权重 &gt; 0</span>
+            )}
             <div className="flex-1" />
-            <Button onClick={save} disabled={saving || urls.length === 0}>
+            <Button onClick={save} disabled={saving || rows.length === 0}>
               <Save className="h-4 w-4" /> {saving ? '保存中…' : '保存'}
             </Button>
           </div>

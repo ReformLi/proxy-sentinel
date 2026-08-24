@@ -76,13 +76,21 @@ func main() {
 		log.Fatalf("初始化账号/Token 失败: %v", err)
 	}
 
-	// 3.5 数据库持久化的运行时设置覆盖配置文件（/settings 页面修改过的后端/策略优先）
-	if urls, ok, err := db.GetSettingBackends(context.Background()); err == nil && ok && len(urls) > 0 {
-		log.Printf("已加载数据库持久化的后端列表（%d 个，优先于 config.yaml）", len(urls))
-		cfg.Backends = urls
+	// 3.5 数据库持久化的运行时设置覆盖配置文件（/settings 页面修改过的后端/策略/定向规则优先）
+	backends := make([]storage.WeightedBackend, 0, len(cfg.Backends))
+	for _, u := range cfg.Backends { // config.yaml 后端默认权重 1
+		backends = append(backends, storage.WeightedBackend{URL: u, Weight: 1})
+	}
+	if wbs, ok, err := db.GetSettingBackends(context.Background()); err == nil && ok && len(wbs) > 0 {
+		log.Printf("已加载数据库持久化的后端列表（%d 个，优先于 config.yaml）", len(wbs))
+		backends = wbs
 	}
 	if v, ok, err := db.GetSetting(context.Background(), storage.SettingStrategy); err == nil && ok && v != "" {
 		cfg.Balancer.Strategy = v
+	}
+	rules, _, _ := db.GetSettingRules(context.Background())
+	if len(rules) > 0 {
+		log.Printf("已加载定向分流规则 %d 条", len(rules))
 	}
 
 	// 4. 创建认证组件
@@ -92,7 +100,7 @@ func main() {
 	proxyAuth := auth.NewProxyAuthMiddleware(db)
 
 	// 5. 负载均衡 + 健康检查 + 代理处理器 + 日志写入器
-	balancer := proxy.NewBalancer(cfg.Balancer.Strategy, cfg.Backends)
+	balancer := proxy.NewBalancer(cfg.Balancer.Strategy, backends)
 	health := proxy.NewHealthChecker(balancer, 30*time.Second)
 	health.Start()
 	defer health.Stop()
@@ -102,6 +110,7 @@ func main() {
 
 	proxyHandler := proxy.NewHandler(balancer, logWriter, cfg.Proxy.TimeoutSeconds,
 		int64(cfg.Proxy.MaxBodyBytes), int64(cfg.Log.BodyMaxBytes), cfg.Proxy.TrustForwardedHeaders)
+	proxyHandler.SetRules(rules)
 
 	// 6. 统计服务 + 告警引擎 + API Server
 	realtimeSvc := stats.NewRealtimeService(db)

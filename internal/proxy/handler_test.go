@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"proxy-sentinel/internal/storage"
 )
 
 // TestRequestIDHeader 验证：每个代理请求都会生成/复用 X-Request-ID，
@@ -22,12 +24,13 @@ func TestRequestIDHeader(t *testing.T) {
 	defer backend.Close()
 
 	h := &Handler{
-		balancer:   NewBalancer("round_robin", []string{backend.URL}),
+		balancer:   NewBalancer("round_robin", []storage.WeightedBackend{{URL: backend.URL, Weight: 1}}),
 		timeout:    5 * time.Second,
 		maxBodyBytes: 1024,
 		logBodyMax: 1024,
 		transport:  http.DefaultTransport,
 	}
+	h.SetRules(nil)
 
 	// 1. 自动生成
 	w := httptest.NewRecorder()

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"proxy-sentinel/internal/storage"
 )
 
 // Balancer 负载均衡器接口
@@ -24,8 +26,8 @@ type Balancer interface {
 // DynamicManager 可运行时调整的负载均衡器能力（/settings 页面使用）
 type DynamicManager interface {
 	Balancer
-	// SetBackends 替换后端列表（新节点默认健康）
-	SetBackends(urls []string)
+	// SetBackends 替换后端列表（带权重；新节点默认健康）
+	SetBackends(backends []storage.WeightedBackend)
 	// SetStrategy 切换负载均衡策略
 	SetStrategy(strategy string) error
 	// Strategy 当前策略
@@ -36,22 +38,23 @@ type DynamicManager interface {
 type BackendStat struct {
 	URL     string `json:"url"`
 	Healthy bool   `json:"healthy"`
+	Weight  int    `json:"weight"`
 }
 
-// dynamicBalancer 支持 round_robin / random 双策略与运行时热更新
+// dynamicBalancer 支持 round_robin / random / weighted 策略与运行时热更新
 type dynamicBalancer struct {
 	mu       sync.RWMutex
 	strategy string
-	backends []string
+	backends []storage.WeightedBackend
 	healthy  map[string]bool
 	counter  uint64 // 轮询计数（atomic）
 }
 
 // NewBalancer 创建负载均衡器（返回支持热更新的实例）
-func NewBalancer(strategy string, backends []string) DynamicManager {
+func NewBalancer(strategy string, backends []storage.WeightedBackend) DynamicManager {
 	healthy := make(map[string]bool, len(backends))
 	for _, b := range backends {
-		healthy[b] = true
+		healthy[b.URL] = true
 	}
 	return &dynamicBalancer{
 		strategy: normalizeStrategy(strategy),
@@ -61,8 +64,8 @@ func NewBalancer(strategy string, backends []string) DynamicManager {
 }
 
 func normalizeStrategy(s string) string {
-	if s == "random" {
-		return "random"
+	if s == "random" || s == "weighted" {
+		return s
 	}
 	return "round_robin"
 }
@@ -78,23 +81,46 @@ func (b *dynamicBalancer) Next() string {
 	case "random":
 		healthy := make([]string, 0, n)
 		for _, be := range b.backends {
-			if b.healthy[be] {
-				healthy = append(healthy, be)
+			if b.healthy[be.URL] {
+				healthy = append(healthy, be.URL)
 			}
 		}
 		if len(healthy) == 0 {
-			return b.backends[rand.Intn(n)] // 全不健康时兜底，让上层返回错误
+			return b.backends[rand.Intn(n)].URL // 全不健康时兜底，让上层返回错误
 		}
 		return healthy[rand.Intn(len(healthy))]
+	case "weighted":
+		// 加权随机（灰度发布）：权重 0 的后端不接流量；
+		// 健康检查剔除后剩余后端按权重归一化分配
+		total := 0
+		for _, be := range b.backends {
+			if b.healthy[be.URL] && be.Weight > 0 {
+				total += be.Weight
+			}
+		}
+		if total == 0 {
+			return "" // 无可接流量的后端
+		}
+		p := rand.Intn(total)
+		for _, be := range b.backends {
+			if !b.healthy[be.URL] || be.Weight <= 0 {
+				continue
+			}
+			p -= be.Weight
+			if p < 0 {
+				return be.URL
+			}
+		}
+		return "" // 不可达（total>0 时必有命中）
 	default: // round_robin
 		idx := int(atomic.AddUint64(&b.counter, 1)-1) % n
 		for i := 0; i < n; i++ {
 			candidate := b.backends[(idx+i)%n]
-			if b.healthy[candidate] {
-				return candidate
+			if b.healthy[candidate.URL] {
+				return candidate.URL
 			}
 		}
-		return b.backends[0] // 全不健康时兜底
+		return b.backends[0].URL // 全不健康时兜底
 	}
 }
 
@@ -119,26 +145,26 @@ func (b *dynamicBalancer) Backends() []BackendStat {
 	defer b.mu.RUnlock()
 	out := make([]BackendStat, 0, len(b.backends))
 	for _, be := range b.backends {
-		out = append(out, BackendStat{URL: be, Healthy: b.healthy[be]})
+		out = append(out, BackendStat{URL: be.URL, Healthy: b.healthy[be.URL], Weight: be.Weight})
 	}
 	return out
 }
 
 // SetBackends 替换后端列表：旧节点保留健康状态，新节点默认健康
-func (b *dynamicBalancer) SetBackends(urls []string) {
+func (b *dynamicBalancer) SetBackends(backends []storage.WeightedBackend) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	newHealthy := make(map[string]bool, len(urls))
-	for _, u := range urls {
-		newHealthy[u] = true // 新节点默认健康；同名旧节点也会恢复初始态
+	newHealthy := make(map[string]bool, len(backends))
+	for _, wb := range backends {
+		newHealthy[wb.URL] = true // 新节点默认健康；同名旧节点也会恢复初始态
 	}
-	b.backends = urls
+	b.backends = backends
 	b.healthy = newHealthy
 }
 
 func (b *dynamicBalancer) SetStrategy(strategy string) error {
-	if strategy != "round_robin" && strategy != "random" {
-		return fmt.Errorf("非法的负载均衡策略: %s（仅支持 round_robin/random）", strategy)
+	if strategy != "round_robin" && strategy != "random" && strategy != "weighted" {
+		return fmt.Errorf("非法的负载均衡策略: %s（仅支持 round_robin/random/weighted）", strategy)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

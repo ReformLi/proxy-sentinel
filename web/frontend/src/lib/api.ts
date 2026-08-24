@@ -126,11 +126,22 @@ export interface PagedLogs {
 export interface BackendStat {
   url: string
   healthy: boolean
+  weight: number
+}
+
+export type RouteRuleType = 'header' | 'cookie' | 'path'
+
+export interface RouteRule {
+  type: RouteRuleType
+  key: string
+  value: string
+  backend: string
 }
 
 export interface SettingsInfo {
   backends: BackendStat[] | null
   strategy: string
+  rules: RouteRule[] | null
   log: {
     level: string
     sample_rate: number
