@@ -208,7 +208,7 @@ function useTrendOption(trend: TrendData | null) {
     () => ({
       tooltip: { trigger: 'axis' },
       legend: { data: ['请求数', '错误数'] },
-      grid: { left: 48, right: 16, top: 36, bottom: 28 },
+      grid: { left: 8, right: 16, top: 36, bottom: 28, containLabel: true },
       xAxis: { type: 'category', data: points.map((p) => new Date(p.ts).toLocaleTimeString('zh-CN', { hour12: false })) },
       yAxis: { type: 'value', minInterval: 1 },
       series: [
@@ -225,9 +225,15 @@ function useDurationOption(trend: TrendData | null) {
   return useMemo<echarts.EChartsOption>(
     () => ({
       tooltip: { trigger: 'axis', valueFormatter: (v) => `${Math.round(Number(v ?? 0))} ms` },
-      grid: { left: 48, right: 16, top: 16, bottom: 28 },
+      grid: { left: 8, right: 16, top: 16, bottom: 28, containLabel: true },
       xAxis: { type: 'category', data: points.map((p) => new Date(p.ts).toLocaleTimeString('zh-CN', { hour12: false })) },
-      yAxis: { type: 'value', axisLabel: { formatter: '{value} ms' } },
+      // 轴标签人性化：大数值换算成秒，避免标签过宽挤占绘图区（containLabel 保证不被裁剪）
+      yAxis: {
+        type: 'value',
+        axisLabel: {
+          formatter: (v: number) => (v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`),
+        },
+      },
       series: [
         {
           name: '平均耗时',

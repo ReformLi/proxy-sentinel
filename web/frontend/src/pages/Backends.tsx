@@ -160,7 +160,7 @@ function useProbeOption(item: BackendMonitorItem, win: string): echarts.EChartsO
     )
     return {
       tooltip: { trigger: 'axis' },
-      grid: { left: 44, right: 12, top: 12, bottom: 24 },
+      grid: { left: 8, right: 12, top: 12, bottom: 24, containLabel: true },
       xAxis: { type: 'category', data: xs, axisLabel: { fontSize: 10 } },
       yAxis: { type: 'value', name: 'ms', axisLabel: { fontSize: 10 } },
       series: [
@@ -185,12 +185,13 @@ function useTrafficOption(item: BackendMonitorItem, win: string): echarts.EChart
     const xs = traffic.map((p) => fmtTs(p.ts, win))
     return {
       tooltip: { trigger: 'axis' },
-      legend: { top: 0, right: 0, textStyle: { fontSize: 10 } },
-      grid: { left: 44, right: 36, top: 24, bottom: 24 },
+      // 双轴名称与图例信息重复（请求量/5xx），小图里去掉轴名称避免与图例挤在一起
+      legend: { top: 0, right: 0, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 10 } },
+      grid: { left: 8, right: 8, top: 22, bottom: 24, containLabel: true },
       xAxis: { type: 'category', data: xs, axisLabel: { fontSize: 10 } },
       yAxis: [
-        { type: 'value', name: '请求', axisLabel: { fontSize: 10 } },
-        { type: 'value', name: '5xx', axisLabel: { fontSize: 10 }, splitLine: { show: false } },
+        { type: 'value', axisLabel: { fontSize: 10 } },
+        { type: 'value', axisLabel: { fontSize: 10 }, splitLine: { show: false } },
       ],
       series: [
         {
