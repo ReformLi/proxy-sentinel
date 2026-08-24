@@ -124,6 +124,7 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("GET /dashboard", webPage(spa))
 	mux.Handle("GET /logs", webPage(spa))
 	mux.Handle("GET /flow", webPage(spa))
+	mux.Handle("GET /backends", webPage(spa))
 	mux.Handle("GET /tokens", webPage(spa))
 	mux.Handle("GET /settings", webPage(spa))
 
@@ -134,6 +135,7 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("GET /api/stats/trend", webJSON(http.HandlerFunc(s.trendStats)))
 	mux.Handle("GET /api/stats/flow", webJSON(http.HandlerFunc(s.flowStats)))
 	mux.Handle("GET /api/stats/clients", webJSON(http.HandlerFunc(s.clientStats)))
+	mux.Handle("GET /api/stats/backends", webJSON(http.HandlerFunc(s.backendsStats)))
 	mux.Handle("GET /api/logs", webJSON(http.HandlerFunc(s.listLogs)))
 	mux.Handle("GET /api/logs/stream", webJSON(http.HandlerFunc(s.streamLogs)))
 	mux.Handle("GET /api/logs/export", webJSON(http.HandlerFunc(s.exportCSV)))

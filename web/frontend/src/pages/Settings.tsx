@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 /** 配置管理：后端节点/权重/策略/定向规则（运行时生效 + 数据库持久化）、只读运行参数 */
 export default function Settings() {
   const [info, setInfo] = useState<SettingsInfo | null>(null)
-  const [rows, setRows] = useState<{ url: string; weight: number }[]>([])
+  const [rows, setRows] = useState<{ url: string; weight: number; health_path: string }[]>([])
   const [strategy, setStrategy] = useState('round_robin')
   const [rules, setRules] = useState<RouteRule[]>([])
   const [rewrites, setRewrites] = useState<RewriteRule[]>([])
@@ -23,7 +23,7 @@ export default function Settings() {
       .get<SettingsInfo>('/api/settings')
       .then((d) => {
         setInfo(d)
-        setRows((d.backends ?? []).map((b) => ({ url: b.url, weight: b.weight ?? 1 })))
+        setRows((d.backends ?? []).map((b) => ({ url: b.url, weight: b.weight ?? 1, health_path: b.health_path ?? '' })))
         setStrategy(d.strategy)
         setRules(d.rules ?? [])
         setRewrites(d.rewrites ?? [])
@@ -51,7 +51,7 @@ export default function Settings() {
       setMsg('该后端已存在')
       return
     }
-    setRows([...rows, { url: u, weight: 1 }])
+    setRows([...rows, { url: u, weight: 1, health_path: '' }])
     setNewUrl('')
     setMsg('')
   }
@@ -115,6 +115,17 @@ export default function Settings() {
                         )
                       }
                       className="w-20 text-xs"
+                    />
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1" title="健康检查探测路径（空 = /），需以 / 开头">
+                    <span className="text-xs text-muted-foreground">探测</span>
+                    <Input
+                      value={row.health_path}
+                      placeholder="/"
+                      onChange={(e) =>
+                        setRows((s) => s.map((x, j) => (j === i ? { ...x, health_path: e.target.value } : x)))
+                      }
+                      className="w-24 font-mono text-xs"
                     />
                   </div>
                   <Button
@@ -552,6 +563,7 @@ function AlertCard() {
     window_minutes: 5,
     min_sample: 20,
     backend_down: true,
+    latency_ms: 0,
     silence_minutes: 10,
   })
   const [msg, setMsg] = useState('')
@@ -630,7 +642,7 @@ function AlertCard() {
           onChange={(v) => setRules({ ...rules, backend_down: v })}
         />
 
-        <div className="grid gap-4 sm:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-5">
           <NumField
             label="错误率阈值 (%)"
             hint="窗口内 5xx 占比超过该值时告警，0 = 关闭"
@@ -639,7 +651,7 @@ function AlertCard() {
           />
           <NumField
             label="统计窗口（分钟）"
-            hint="错误率统计的时间窗口"
+            hint="错误率/延迟统计的时间窗口"
             value={rules.window_minutes}
             onChange={(v) => setRules({ ...rules, window_minutes: v })}
           />
@@ -648,6 +660,12 @@ function AlertCard() {
             hint="窗口内请求数不足时不判定，防误报"
             value={rules.min_sample}
             onChange={(v) => setRules({ ...rules, min_sample: v })}
+          />
+          <NumField
+            label="延迟阈值 (ms)"
+            hint="后端探测平均延迟超过该值时告警，0 = 关闭"
+            value={rules.latency_ms}
+            onChange={(v) => setRules({ ...rules, latency_ms: v })}
           />
           <NumField
             label="静默期（分钟）"

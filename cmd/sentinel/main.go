@@ -103,9 +103,13 @@ func main() {
 	webAuth := auth.NewWebAuthMiddleware(jwtMgr)
 	proxyAuth := auth.NewProxyAuthMiddleware(db)
 
-	// 5. 负载均衡 + 健康检查 + 代理处理器 + 日志写入器
+	// 5. 负载均衡 + 健康检查（探测结果落库） + 代理处理器 + 日志写入器
 	balancer := proxy.NewBalancer(cfg.Balancer.Strategy, backends)
-	health := proxy.NewHealthChecker(balancer, 30*time.Second)
+	health := proxy.NewHealthChecker(balancer, 30*time.Second, func(res proxy.ProbeResult) {
+		if err := db.InsertHealthLog(context.Background(), res.URL, res.Healthy, res.LatencyMs, res.StatusCode, res.Error); err != nil {
+			log.Printf("写入健康检查日志失败 [%s]: %v", res.URL, err)
+		}
+	})
 	health.Start()
 	defer health.Stop()
 
@@ -251,6 +255,11 @@ func startRetention(db *storage.DB, retentionDays int) func() {
 				}
 				if n > 0 {
 					log.Printf("已清理 %d 条过期日志（>%d 天）", n, retentionDays)
+				}
+				if hn, err := db.DeleteHealthBefore(context.Background(), before); err != nil {
+					log.Printf("清理过期健康检查日志失败: %v", err)
+				} else if hn > 0 {
+					log.Printf("已清理 %d 条过期健康检查记录（>%d 天）", hn, retentionDays)
 				}
 			case <-done:
 				ticker.Stop()

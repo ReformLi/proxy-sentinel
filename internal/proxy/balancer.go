@@ -36,9 +36,10 @@ type DynamicManager interface {
 
 // BackendStat 后端状态信息
 type BackendStat struct {
-	URL     string `json:"url"`
-	Healthy bool   `json:"healthy"`
-	Weight  int    `json:"weight"`
+	URL        string `json:"url"`
+	Healthy    bool   `json:"healthy"`
+	Weight     int    `json:"weight"`
+	HealthPath string `json:"health_path"` // 健康检查探测路径（空 = /）
 }
 
 // dynamicBalancer 支持 round_robin / random / weighted 策略与运行时热更新
@@ -145,7 +146,7 @@ func (b *dynamicBalancer) Backends() []BackendStat {
 	defer b.mu.RUnlock()
 	out := make([]BackendStat, 0, len(b.backends))
 	for _, be := range b.backends {
-		out = append(out, BackendStat{URL: be.URL, Healthy: b.healthy[be.URL], Weight: be.Weight})
+		out = append(out, BackendStat{URL: be.URL, Healthy: b.healthy[be.URL], Weight: be.Weight, HealthPath: be.HealthPath})
 	}
 	return out
 }
@@ -178,20 +179,42 @@ func (b *dynamicBalancer) Strategy() string {
 	return b.strategy
 }
 
+// ProbeResult 单次健康探测结果（供落库与告警联动使用）
+type ProbeResult struct {
+	URL        string `json:"url"`
+	Healthy    bool   `json:"healthy"`
+	LatencyMs  int64  `json:"latency_ms"`
+	StatusCode int    `json:"status_code"`
+	Error      string `json:"error,omitempty"`
+}
+
+// ProbeRecorder 探测结果记录器（健康检查器每轮探测后回调；可为 nil）
+type ProbeRecorder func(res ProbeResult)
+
 // HealthChecker 定期探测后端健康状态（探测成功自动恢复 MarkUp）
 type HealthChecker struct {
 	balancer Balancer
 	client   *http.Client
 	interval time.Duration
+	recorder ProbeRecorder
 	done     chan struct{}
 }
 
-// NewHealthChecker 创建健康检查器
-func NewHealthChecker(b Balancer, interval time.Duration) *HealthChecker {
+// NewHealthChecker 创建健康检查器；recorder 可为 nil（不记录探测明细）
+func NewHealthChecker(b Balancer, interval time.Duration, recorder ProbeRecorder) *HealthChecker {
 	return &HealthChecker{
 		balancer: b,
-		client:   &http.Client{Timeout: 3 * time.Second},
+		client:   &http.Client{
+			// 探测超时须短于探测间隔，避免堆积
+			Timeout: func() time.Duration {
+				if interval > 5*time.Second {
+					return 3 * time.Second
+				}
+				return interval / 2
+			}(),
+		},
 		interval: interval,
+		recorder: recorder,
 		done:     make(chan struct{}),
 	}
 }
@@ -217,19 +240,36 @@ func (h *HealthChecker) Stop() { close(h.done) }
 
 func (h *HealthChecker) check() {
 	for _, be := range h.balancer.Backends() {
-		go func(url string) {
-			resp, err := h.client.Get(url)
+		go func(url, path string) {
+			if path == "" {
+				path = "/"
+			}
+			start := time.Now()
+			res := ProbeResult{URL: url}
+			resp, err := h.client.Get(url + path)
+			res.LatencyMs = time.Since(start).Milliseconds()
 			if err != nil {
-				h.balancer.MarkDown(url)
+				res.Error = err.Error()
+				h.finish(url, res, false)
 				return
 			}
 			resp.Body.Close()
+			res.StatusCode = resp.StatusCode
 			// 5xx 视为不健康，其余（含 4xx）视为存活
-			if resp.StatusCode >= 500 {
-				h.balancer.MarkDown(url)
-			} else {
-				h.balancer.MarkUp(url)
-			}
-		}(be.URL)
+			h.finish(url, res, resp.StatusCode < 500)
+		}(be.URL, be.HealthPath)
+	}
+}
+
+// finish 应用探测结果：更新均衡器健康状态并回调记录器
+func (h *HealthChecker) finish(url string, res ProbeResult, healthy bool) {
+	res.Healthy = healthy
+	if healthy {
+		h.balancer.MarkUp(url)
+	} else {
+		h.balancer.MarkDown(url)
+	}
+	if h.recorder != nil {
+		h.recorder(res)
 	}
 }

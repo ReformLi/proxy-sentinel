@@ -111,8 +111,13 @@ func (s *Server) updateBackends(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "权重需在 0~100 之间: "+u)
 			return
 		}
+		hp := strings.TrimSpace(wb.HealthPath)
+		if hp != "" && !strings.HasPrefix(hp, "/") {
+			writeError(w, http.StatusBadRequest, "健康检查探测路径需以 / 开头（后端 "+u+"）")
+			return
+		}
 		seen[u] = true
-		backends = append(backends, storage.WeightedBackend{URL: u, Weight: wb.Weight})
+		backends = append(backends, storage.WeightedBackend{URL: u, Weight: wb.Weight, HealthPath: hp})
 	}
 	if len(backends) == 0 {
 		writeError(w, http.StatusBadRequest, "后端列表不能为空")

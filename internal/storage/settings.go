@@ -17,8 +17,9 @@ const (
 
 // WeightedBackend 带权重的后端（灰度发布：权重 = 流量比例，0 = 不接流量但保留健康检查）
 type WeightedBackend struct {
-	URL    string `json:"url"`
-	Weight int    `json:"weight"` // 0~100；round_robin/random 策略下忽略
+	URL        string `json:"url"`
+	Weight     int    `json:"weight"`      // 0~100；round_robin/random 策略下忽略
+	HealthPath string `json:"health_path"` // 健康检查探测路径（空 = /）
 }
 
 // RouteRule 定向分流规则：命中的请求固定路由到指定后端（优先于负载均衡策略）

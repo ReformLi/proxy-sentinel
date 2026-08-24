@@ -19,6 +19,7 @@ type Rules struct {
 	WindowMinutes  int     `json:"window_minutes"`   // 错误率统计窗口（分钟）
 	MinSample      int     `json:"min_sample"`       // 触发错误率告警的最小请求数（避免小样本误报）
 	BackendDown    bool    `json:"backend_down"`     // 后端宕机/恢复通知
+	LatencyMs      int     `json:"latency_ms"`       // 探测平均延迟阈值（ms），0 = 关闭该规则
 	SilenceMinutes int     `json:"silence_minutes"`  // 静默期：同一告警 N 分钟内不重复发送
 }
 
@@ -29,6 +30,7 @@ var DefaultRules = Rules{
 	WindowMinutes:  5,
 	MinSample:      20,
 	BackendDown:    true,
+	LatencyMs:      0,
 	SilenceMinutes: 10,
 }
 
@@ -45,6 +47,9 @@ func (r Rules) Validate() error {
 	}
 	if r.SilenceMinutes < 1 || r.SilenceMinutes > 1440 {
 		return fmt.Errorf("静默期必须在 1~1440 分钟之间")
+	}
+	if r.LatencyMs < 0 || r.LatencyMs > 60000 {
+		return fmt.Errorf("延迟阈值必须在 0~60000ms 之间（0 = 关闭）")
 	}
 	return nil
 }
@@ -178,6 +183,7 @@ func (e *Engine) evaluate() {
 	}
 	e.checkBackends(rules)
 	e.checkErrorRate(rules)
+	e.checkLatency(rules)
 }
 
 // checkBackends 检测后端健康状态变化（宕机/恢复）
@@ -237,6 +243,30 @@ func (e *Engine) checkErrorRate(rules Rules) {
 		"⚠️ 错误率超阈值",
 		fmt.Sprintf("**代理错误率超过阈值**\n\n- 当前错误率：**%.1f%%**（阈值 %.1f%%）\n- 窗口：%d 分钟内 %d 次请求，%d 次 5xx\n- 时间：%s",
 			rate, rules.ErrorRatePct, rules.WindowMinutes, total, errCount, time.Now().Format("2006-01-02 15:04:05")))
+}
+
+// checkLatency 检测窗口内各后端健康探测平均延迟（来自 backend_health_logs，仅统计健康探测）
+func (e *Engine) checkLatency(rules Rules) {
+	if rules.LatencyMs <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	from := time.Now().Add(-time.Duration(rules.WindowMinutes) * time.Minute)
+	statsList, err := e.db.GetProbeLatencyStats(ctx, from)
+	if err != nil {
+		log.Printf("告警引擎：查询探测延迟统计失败: %v", err)
+		return
+	}
+	for _, st := range statsList {
+		if st.AvgMs < float64(rules.LatencyMs) {
+			continue
+		}
+		e.fire(rules, "backend-latency:"+st.Backend,
+			"🐌 后端延迟过高",
+			fmt.Sprintf("**后端探测延迟超过阈值**\n\n- 地址：%s\n- 窗口平均延迟：**%.0fms**（阈值 %dms，%d 次探测）\n- 时间：%s\n\n节点存活但响应缓慢，请关注。",
+				st.Backend, st.AvgMs, rules.LatencyMs, st.Probes, time.Now().Format("2006-01-02 15:04:05")))
+	}
 }
 
 // fire 发送告警（受静默期约束）

@@ -127,6 +127,7 @@ export interface BackendStat {
   url: string
   healthy: boolean
   weight: number
+  health_path?: string
 }
 
 export type RouteRuleType = 'header' | 'cookie' | 'path'
@@ -193,6 +194,7 @@ export interface AlertRules {
   window_minutes: number
   min_sample: number
   backend_down: boolean
+  latency_ms: number
   silence_minutes: number
 }
 
@@ -216,4 +218,32 @@ export interface IPACLConfig {
   default: IPACLDefault
   blacklist: IPACLEntry[] | null
   whitelist: IPACLEntry[] | null
+}
+
+export interface HealthPoint {
+  ts: string
+  healthy: boolean
+  latency_avg: number
+  probes: number
+}
+
+export interface TrafficPoint {
+  ts: string
+  count: number
+  error_count: number
+  avg_duration: number
+}
+
+export interface BackendMonitorItem {
+  backend: string
+  healthy: boolean
+  health_path: string
+  uptime_pct: number
+  probes: HealthPoint[] | null
+  traffic: TrafficPoint[] | null
+}
+
+export interface BackendMonitorResp {
+  window: string
+  items: BackendMonitorItem[] | null
 }

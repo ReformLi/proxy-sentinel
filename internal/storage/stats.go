@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -64,19 +65,31 @@ type TrendPoint struct {
 	AvgDuration float64   `json:"avg_duration"`
 }
 
+// sqliteEpochExpr 生成将 DATETIME 列转为真实 UTC epoch 秒的 SQL 表达式。
+// modernc.org/sqlite 把 time.Time 存成 Go String() 格式：
+//
+//	"2026-08-24 12:06:05.1882565 +0800 CST m=+120.57"
+//
+// 前 19 位是本地墙上时间，其后依次为小数秒、空格、±HHMM 时区偏移、" CST"、m=+ 单调钟后缀。
+// 解析：墙上时间按 UTC 取 epoch，再按 ±HHMM 修正；无时区后缀的旧格式（UTC 存储）直接使用。
+func sqliteEpochExpr(col string) string {
+	// 小数秒之后第一个空格的位置（相对第 20 字符），时区偏移紧跟其后
+	sp := fmt.Sprintf("instr(substr(%s, 20), ' ')", col)
+	off := fmt.Sprintf("substr(%s, 20 + %s, 5)", col, sp)
+	return fmt.Sprintf(
+		`CASE WHEN %s > 0 THEN CAST(strftime('%%s', substr(%s, 1, 19)) AS INTEGER)`+
+			` - (CASE WHEN substr(%s, 1, 1) = '-' THEN -1 ELSE 1 END)`+
+			` * (CAST(substr(%s, 2, 2) AS INTEGER) * 3600 + CAST(substr(%s, 4, 2) AS INTEGER) * 60)`+
+			` ELSE CAST(strftime('%%s', substr(%s, 1, 19)) AS INTEGER) END`,
+		sp, col, off, off, off, col)
+}
+
 // GetTrend 获取请求量与错误趋势（按指定时间桶聚合）
 func (db *DB) GetTrend(ctx context.Context, from, to time.Time, bucketSeconds int) ([]TrendPoint, error) {
 	if bucketSeconds < 1 {
 		bucketSeconds = 60
 	}
-	// modernc.org/sqlite 将 time.Time 存为 "2006-01-02 15:04:05.999999999-07:00"，
-	// SQLite 日期函数无法解析纳秒小数与 ±HH:MM 后缀，直接 strftime 会得到 NULL。
-	// 处理：截取前 19 位（YYYY-MM-DD HH:MM:SS，本地墙上时间）按 UTC 解析出秒数，
-	// 再减去尾部时区偏移（±HH:MM），得到真实 UTC epoch 后分桶。
-	const tzHour = `CAST(substr(created_at, -6, 3) AS INTEGER)`
-	const tzMin = `CAST(substr(created_at, -2, 2) AS INTEGER)`
-	epochExpr := `(CAST(strftime('%s', substr(created_at, 1, 19)) AS INTEGER) - (` +
-		tzHour + ` * 3600 + (CASE WHEN ` + tzHour + ` >= 0 THEN 1 ELSE -1 END) * ` + tzMin + ` * 60))`
+	epochExpr := sqliteEpochExpr("created_at")
 	q := `SELECT ` +
 		epochExpr + ` / ? * ? AS bucket, ` +
 		`COUNT(*) AS cnt, ` +

@@ -4,6 +4,7 @@ import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import Logs from '@/pages/Logs'
 import Flow from '@/pages/Flow'
+import Backends from '@/pages/Backends'
 import Tokens from '@/pages/Tokens'
 import Settings from '@/pages/Settings'
 
@@ -15,6 +16,7 @@ export default function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/logs" element={<Logs />} />
         <Route path="/flow" element={<Flow />} />
+        <Route path="/backends" element={<Backends />} />
         <Route path="/tokens" element={<Tokens />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

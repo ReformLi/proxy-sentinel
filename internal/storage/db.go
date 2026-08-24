@@ -68,6 +68,17 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS backend_health_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  backend_url TEXT NOT NULL,
+  healthy INTEGER NOT NULL,          -- 1=健康 0=不健康
+  latency_ms INTEGER,               -- 探测耗时（失败时为实际等待时间）
+  status_code INTEGER,              -- 探测响应状态码（网络失败为 NULL）
+  error TEXT,                       -- 失败原因（超时/连接拒绝等）
+  checked_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_bhl_backend_time ON backend_health_logs(backend_url, checked_at);
 `
 
 // DB 封装数据库连接与查询
