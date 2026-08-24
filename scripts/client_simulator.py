@@ -4,29 +4,35 @@ client_simulator.py
 作者: reformLi
 创建日期: 2026/8/24
 最后修改: 2026/8/24
-版本: 1.1.0
+版本: 1.2.0
 
-功能描述: 模拟客户端压测 proxy-sentinel 代理网关（可运行版）
+功能描述: 模拟客户端压测 proxy-sentinel 代理网关（适配 proxy_backend.py 模拟后端）
 """
 
 #!/usr/bin/env python3
 """
-模拟客户端调用 proxy-sentinel 代理网关。
+模拟客户端调用 proxy-sentinel 代理网关（配合 proxy_backend.py 模拟后端使用）。
 
 功能：
-- 支持 GET、POST、PUT、DELETE 等方法
-- 支持随机选择路径（/get, /post, /status/200, /status/404, /delay/1, /headers, /ip）
+- 支持 GET、POST、PUT、DELETE、PATCH 等方法
+- 支持随机选择路径（/get, /post, /status/200, /delay/1, /headers, /ip）
 - 支持并发和循环请求
 - 统计成功/失败/状态码分布
 - 自动携带 Authorization: Bearer <token>
-- 支持自定义代理地址、请求总数、并发数等
+- 采集网关回写的 X-Request-ID（链路追踪，可去前端日志页查询）
+- 采集模拟后端回显的 server_port，统计后端流量分布（验证负载均衡/加权策略）
 
 用法：
     python client_simulator.py --url http://localhost:8080 --token dev-token-123 --count 100 --concurrency 10
 
+配合模拟后端（另开终端，可多实例）：
+    python proxy_backend.py --port 18080
+    python proxy_backend.py --port 18081
+    python proxy_backend.py --port 18082 --error-rate 20   # 模拟 20% 随机错误率
+
 注意：
-    网关代理路由挂在 /proxy/* 前缀下（v1.0 脚本因缺前缀全部 404 且不落库）。
-    本脚本自动拼接前缀：--url 传网关根地址即可，带不带 /proxy 都行。
+    网关代理路由挂在 /proxy/* 前缀下，本脚本自动拼接（--url 传网关根地址即可，带不带 /proxy 都行）。
+    无有效 Token 的请求会被网关 401 拒绝且不落库。
 """
 
 import argparse
@@ -46,17 +52,18 @@ DEFAULT_CONCURRENCY = 5
 PROXY_PREFIX = "/proxy"
 
 # 可用的后端路径（随机选择；转发时自动加 /proxy 前缀）
+# 与 proxy_backend.py 的能力对齐：全路径 catch-all 回显 + /status/<code> + /delay/<seconds>
 PATHS = [
-    "/get",                # GET 请求，回显参数
-    "/post",               # POST 请求
-    "/put",                # PUT 请求
-    "/delete",             # DELETE 请求
-    "/status/200",         # 返回 200 OK
-    "/status/404",         # 返回 404
-    "/status/500",         # 返回 500
-    "/delay/1",            # 延迟 1 秒
-    "/headers",            # 返回请求头
-    "/ip",                 # 返回客户端 IP
+    "/get",                # 任意方法，回显请求信息
+    "/post",               # 任意方法，回显请求信息
+    "/put",                # 任意方法，回显请求信息
+    "/delete",             # 任意方法，回显请求信息
+    "/status/200",         # 手动返回 200（不受错误率影响）
+    "/status/404",         # 手动返回 404（不受错误率影响）
+    "/status/500",         # 手动返回 500（不受错误率影响）
+    "/delay/1",            # 延迟 1 秒（测超时/耗时分桶）
+    "/headers",            # 回显请求头（可验证网关注入的头）
+    "/ip",                 # 回显客户端 IP（后端看到的应是网关 IP）
     "/anything",           # 回显所有信息
 ]
 
@@ -96,24 +103,35 @@ def send_request(proxy_url, token, method, path, data=None):
     }
     start = time.time()
     try:
-        if method == "GET":
-            resp = requests.get(url, headers=headers, timeout=10)
-        elif method == "POST":
-            resp = requests.post(url, headers=headers, json=data or {"test": "value"}, timeout=10)
-        elif method == "PUT":
-            resp = requests.put(url, headers=headers, json=data or {"test": "value"}, timeout=10)
-        elif method == "DELETE":
-            resp = requests.delete(url, headers=headers, timeout=10)
-        else:
-            resp = requests.get(url, headers=headers, timeout=10)  # fallback
-
+        # 通用请求：支持任意方法（模拟后端 catch-all 接受全部方法）
+        body_methods = ("POST", "PUT", "PATCH")
+        resp = requests.request(
+            method, url, headers=headers,
+            json=(data or {"test": "value"}) if method in body_methods else None,
+            timeout=10,
+        )
         elapsed = time.time() - start
+
+        # 采集链路信息：
+        # 1) 网关回写的 X-Request-ID —— 可去前端日志页按链路 ID 查询这次请求
+        request_id = resp.headers.get("X-Request-ID", "")
+        # 2) 模拟后端回显的 server_port —— 标识哪个后端实例处理了请求（负载均衡验证）
+        backend_port = None
+        try:
+            body = resp.json()
+            if isinstance(body, dict) and body.get("server_port") is not None:
+                backend_port = str(body["server_port"])
+        except ValueError:
+            pass  # 非 JSON 响应（如网关错误页）跳过
+
         return {
             "success": resp.status_code < 400,  # 4xx/5xx 都算失败（网关拒绝或后端错误）
             "status": resp.status_code,
             "method": method,
             "path": path,
             "duration": elapsed,
+            "request_id": request_id,
+            "backend_port": backend_port,
             "error": None,
         }
     except Exception as e:
@@ -124,6 +142,8 @@ def send_request(proxy_url, token, method, path, data=None):
             "method": method,
             "path": path,
             "duration": elapsed,
+            "request_id": "",
+            "backend_port": None,
             "error": str(e),
         }
 
@@ -155,6 +175,8 @@ def main():
     parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY, help=f"并发数 (默认 {DEFAULT_CONCURRENCY})")
     parser.add_argument("--methods", nargs="+", default=["GET", "POST", "PUT", "DELETE"],
                         help="允许的 HTTP 方法列表 (默认 GET POST PUT DELETE)")
+    parser.add_argument("--paths", nargs="+", default=PATHS,
+                        help=f"测试路径列表 (默认随机 {len(PATHS)} 个；模拟后端 catch-all 接受任意路径)")
     parser.add_argument("--seed", type=int, default=None, help="随机种子，用于复现")
     args = parser.parse_args()
 
@@ -173,15 +195,16 @@ def main():
     tasks = []
     for i in range(args.count):
         method = random.choice(args.methods)
-        path = random.choice(PATHS)
-        # POST/PUT 可能带 data
-        data = {"id": i, "timestamp": time.time()} if method in ("POST", "PUT") else None
+        path = random.choice(args.paths)
+        # 带-body 方法附带数据（后端会回显）
+        data = {"id": i, "timestamp": time.time()} if method in ("POST", "PUT", "PATCH") else None
         tasks.append((proxy_url, args.token, method, path, data))
 
     print(f"🚀 开始发送 {args.count} 个请求 (并发 {args.concurrency})...")
     print(f"📍 网关地址: {proxy_url}  (代理前缀 /proxy)")
     print(f"🔑 Token: {args.token}")
-    print(f"📋 方法: {', '.join(args.methods)}\n")
+    print(f"📋 方法: {', '.join(args.methods)}")
+    print(f"🛣  路径池: {len(args.paths)} 个\n")
 
     # 使用线程池并发执行
     results = []
@@ -225,13 +248,28 @@ def main():
     print("\n状态码类别分布:")
     for cat, count in status_category_counter.most_common():
         print(f"    {cat}: {count} ({count/total*100:.1f}%)")
+
+    # 后端分布：来自模拟后端回显的 server_port，直观验证负载均衡策略
+    backend_counter = Counter(r["backend_port"] for r in results if r["backend_port"])
+    if backend_counter:
+        print("\n🖥  后端实例分布 (回显 server_port，验证负载均衡):")
+        for port, count in backend_counter.most_common():
+            print(f"    :{port}: {count} ({count/total*100:.1f}%)")
+    else:
+        print("\n🖥  后端实例分布: 无回显数据（后端可能不是 proxy_backend.py，或请求未到达后端）")
+
     print("\n方法分布:")
     for method, count in method_counter.most_common():
         print(f"    {method}: {count} ({count/total*100:.1f}%)")
     print("\n路径分布 (Top 10):")
     for path, count in path_counter.most_common(10):
         print(f"    {path}: {count} ({count/total*100:.1f}%)")
-    print(f"\n💡 以上请求已进入网关代理链路，可在前端「日志查询」页查看（含链路 ID）")
+
+    # 链路追踪：展示采集到的 X-Request-ID 示例
+    rid = next((r["request_id"] for r in results if r["request_id"]), None)
+    if rid:
+        print(f"\n🔗 链路 ID 示例: {rid}（可复制到前端「日志查询」页按链路 ID 检索）")
+    print("💡 以上请求已进入网关代理链路，可在前端「日志查询」页查看完整记录")
 
     # 输出错误详情（如果有）
     errors = [r for r in results if r["error"]]
