@@ -5,11 +5,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"proxy-sentinel/internal/alert"
 	"proxy-sentinel/internal/auth"
 	"proxy-sentinel/internal/config"
+	"proxy-sentinel/internal/ipacl"
 	"proxy-sentinel/internal/logger"
 	"proxy-sentinel/internal/proxy"
 	"proxy-sentinel/internal/ratelimit"
@@ -37,6 +39,7 @@ type Server struct {
 	alertEngine *alert.Engine
 	adminUser  string
 	secure     bool
+	ipACL      atomic.Pointer[ipacl.List] // 代理入口 IP 黑白名单（编译后只读，原子替换热更新）
 }
 
 // NewServer 创建 API Server
@@ -76,6 +79,7 @@ func NewServer(
 		secure:     secure,
 	}
 	s.stopLimiterSweep = limiter.StartSweeper(10 * time.Minute)
+	s.loadIPACL()
 	return s
 }
 
@@ -150,8 +154,12 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("PUT /api/alert/config", webJSON(http.HandlerFunc(s.updateAlertConfig)))
 	mux.Handle("POST /api/alert/test", webJSON(http.HandlerFunc(s.testAlert)))
 
-	// 反向代理路由（Bearer Token 认证 + 按 Token 限流）
-	mux.Handle("/proxy/", s.proxyAuth.Middleware(s.rateLimitMiddleware(s.proxyH)))
+	// IP 黑白名单（保存即热生效）
+	mux.Handle("GET /api/ip-acl", webJSON(http.HandlerFunc(s.getIPACL)))
+	mux.Handle("PUT /api/ip-acl", webJSON(http.HandlerFunc(s.updateIPACL)))
+
+	// 反向代理路由（IP 黑白名单 → Bearer Token 认证 → 按 Token 限流）
+	mux.Handle("/proxy/", s.ipACLMiddleware(s.proxyAuth.Middleware(s.rateLimitMiddleware(s.proxyH))))
 
 	return accessLogger(mux)
 }

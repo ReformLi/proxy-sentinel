@@ -183,3 +183,19 @@ export interface AlertConfigInfo {
   dingtalk_configured: boolean
   check_interval_seconds: number
 }
+
+export type IPACLMode = 'off' | 'on'
+
+export type IPACLDefault = 'allow' | 'deny'
+
+export interface IPACLEntry {
+  value: string
+  note: string
+}
+
+export interface IPACLConfig {
+  mode: IPACLMode
+  default: IPACLDefault
+  blacklist: IPACLEntry[] | null
+  whitelist: IPACLEntry[] | null
+}

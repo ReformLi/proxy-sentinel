@@ -10,6 +10,7 @@ import (
 const (
 	SettingBackends = "backends"          // JSON 数组：运行时管理的后端列表（优先于 config.yaml）
 	SettingStrategy = "balancer_strategy" // 负载均衡策略
+	SettingIPACL    = "ip_acl"            // JSON 对象：代理入口 IP 黑白名单（模式 + 条目）
 )
 
 // GetSetting 读取一项设置；不存在时返回 ("", false, nil)
@@ -52,4 +53,14 @@ func (db *DB) SetSettingBackends(ctx context.Context, urls []string) error {
 		return err
 	}
 	return db.SetSetting(ctx, SettingBackends, string(b))
+}
+
+// GetSettingIPACL 读取 IP 黑白名单配置；不存在时 ok=false（调用方用空配置兜底）
+func (db *DB) GetSettingIPACL(ctx context.Context) (raw string, ok bool, err error) {
+	return db.GetSetting(ctx, SettingIPACL)
+}
+
+// SetSettingIPACL 持久化 IP 黑白名单配置（JSON 原文，合法性由调用方校验）
+func (db *DB) SetSettingIPACL(ctx context.Context, raw string) error {
+	return db.SetSetting(ctx, SettingIPACL, raw)
 }

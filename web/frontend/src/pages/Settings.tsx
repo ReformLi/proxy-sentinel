@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { BellRing, Plus, RefreshCw, Save, Send, Trash2 } from 'lucide-react'
-import { api, type AlertConfigInfo, type AlertRules, type SettingsInfo } from '@/lib/api'
+import { BellRing, Plus, RefreshCw, Save, Send, ShieldAlert, Trash2 } from 'lucide-react'
+import { api, type AlertConfigInfo, type AlertRules, type IPACLConfig, type IPACLDefault, type IPACLEntry, type IPACLMode, type SettingsInfo } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input, Select } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -187,6 +187,213 @@ export default function Settings() {
 
       {/* 告警通知 */}
       <AlertCard />
+
+      {/* IP 访问控制 */}
+      <IPACLCard />
+    </div>
+  )
+}
+
+/** IP 黑白名单（双名单）：作用于 /proxy 入口（认证之前拦截），保存后立即生效。
+ *  评估顺序：黑名单命中拒绝（绝对优先）→ 白名单命中放行 → 都未命中走默认动作 */
+function IPACLCard() {
+  const [mode, setMode] = useState<IPACLMode>('off')
+  const [def, setDef] = useState<IPACLDefault>('allow')
+  const [blacklist, setBlacklist] = useState<IPACLEntry[]>([])
+  const [whitelist, setWhitelist] = useState<IPACLEntry[]>([])
+  const [msg, setMsg] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    api
+      .get<IPACLConfig>('/api/ip-acl')
+      .then((d) => {
+        setMode(d.mode)
+        setDef(d.default ?? 'allow')
+        setBlacklist(d.blacklist ?? [])
+        setWhitelist(d.whitelist ?? [])
+      })
+      .catch(() => {})
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    setMsg('')
+    try {
+      await api.put('/api/ip-acl', { mode, default: def, blacklist, whitelist })
+      setMsg('已保存：立即生效，重启后保留')
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const denyAllRisk = mode === 'on' && def === 'deny' && whitelist.length === 0
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldAlert className="h-4 w-4" /> IP 访问控制（/proxy 入口）
+        </CardTitle>
+        <CardDescription>
+          按客户端 TCP 直连 IP 拦截（不读 X-Forwarded-For，无法伪造绕过）；保存后立即生效，重启后保留
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* 开关 + 默认动作 */}
+        <div className="flex flex-wrap items-center gap-3">
+          <Select
+            value={mode}
+            onChange={(e) => {
+              setMode(e.target.value as IPACLMode)
+              setMsg('')
+            }}
+            className="w-40"
+          >
+            <option value="off">关闭（不拦截）</option>
+            <option value="on">启用</option>
+          </Select>
+          <Select
+            value={def}
+            onChange={(e) => {
+              setDef(e.target.value as IPACLDefault)
+              setMsg('')
+            }}
+            className="w-64"
+            disabled={mode === 'off'}
+          >
+            <option value="allow">默认放行（黑名单为主）</option>
+            <option value="deny">默认拒绝（白名单为准入）</option>
+          </Select>
+          <span className="text-xs text-muted-foreground">
+            判定顺序：黑名单命中 → 拒绝；白名单命中 → 放行；都未命中 → 默认动作
+          </span>
+        </div>
+
+        {/* 双名单条目 */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <ACLGroup
+            title="黑名单"
+            hint="命中即拒绝（优先级最高，白名单无法覆盖）"
+            entries={blacklist}
+            disabled={mode === 'off'}
+            onChange={setBlacklist}
+            onError={setMsg}
+          />
+          <ACLGroup
+            title="白名单"
+            hint="命中放行；默认动作为「拒绝」时不可为空"
+            entries={whitelist}
+            disabled={mode === 'off'}
+            onChange={setWhitelist}
+            onError={setMsg}
+          />
+        </div>
+
+        <div className="flex items-center gap-3 border-t pt-4">
+          <p className="text-xs text-muted-foreground">保存时后端会校验全部条目，存在非法条目将整单拒绝</p>
+          <div className="flex-1" />
+          <Button onClick={save} disabled={saving || denyAllRisk}>
+            <Save className="h-4 w-4" /> {saving ? '保存中…' : '保存'}
+          </Button>
+        </div>
+        {denyAllRisk && (
+          <p className="text-sm text-amber-600 dark:text-amber-400">
+            默认动作为「拒绝」且白名单为空 = 拒绝所有请求，请先添加白名单条目
+          </p>
+        )}
+        {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** 一份名单分组：条目列表 + 添加行 */
+function ACLGroup({
+  title,
+  hint,
+  entries,
+  disabled,
+  onChange,
+  onError,
+}: {
+  title: string
+  hint: string
+  entries: IPACLEntry[]
+  disabled: boolean
+  onChange: (v: IPACLEntry[]) => void
+  onError: (m: string) => void
+}) {
+  const [newValue, setNewValue] = useState('')
+  const [newNote, setNewNote] = useState('')
+
+  // 前端轻校验格式（最终以后端校验为准）
+  const validEntry = (v: string) =>
+    /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/.test(v) || /^([0-9a-fA-F:]+:+)+[0-9a-fA-F:]+(\/\d{1,3})?$/.test(v)
+
+  const add = () => {
+    const v = newValue.trim()
+    if (!v) return
+    if (!validEntry(v)) {
+      onError('格式需为 IP（1.2.3.4 / ::1）或 CIDR 网段（10.0.0.0/8 / fe80::/10）')
+      return
+    }
+    if (entries.some((e) => e.value === v)) {
+      onError(`${title}中已存在 ${v}`)
+      return
+    }
+    onChange([...entries, { value: v, note: newNote.trim() }])
+    setNewValue('')
+    setNewNote('')
+    onError('')
+  }
+
+  return (
+    <div className={`space-y-2 rounded-lg border p-3 ${disabled ? 'opacity-50' : ''}`}>
+      <div>
+        <span className="text-sm font-semibold">{title}</span>
+        <span className="ml-2 text-xs text-muted-foreground">{hint}</span>
+      </div>
+      {entries.map((e, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <span className="w-44 shrink-0 truncate rounded-md border bg-muted/30 px-2 py-1.5 font-mono text-xs" title={e.value}>
+            {e.value}
+          </span>
+          <Input
+            value={e.note}
+            placeholder="备注（可选）"
+            disabled={disabled}
+            onChange={(ev) => onChange(entries.map((x, j) => (j === i ? { ...x, note: ev.target.value } : x)))}
+            className="flex-1 text-xs"
+          />
+          <Button
+            size="icon"
+            variant="ghost"
+            title="删除"
+            disabled={disabled}
+            onClick={() => onChange(entries.filter((_, j) => j !== i))}
+          >
+            <Trash2 className="h-4 w-4 text-destructive" />
+          </Button>
+        </div>
+      ))}
+      {entries.length === 0 && <p className="text-xs text-muted-foreground">暂无条目</p>}
+      <div className="flex gap-2 pt-1">
+        <Input
+          placeholder="IP / CIDR"
+          value={newValue}
+          disabled={disabled}
+          onChange={(e) => setNewValue(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && add()}
+          className="w-44 font-mono text-xs"
+        />
+        <Input placeholder="备注（可选）" value={newNote} disabled={disabled} onChange={(e) => setNewNote(e.target.value)} className="flex-1 text-xs" />
+        <Button variant="outline" size="sm" onClick={add} disabled={disabled}>
+          <Plus className="h-3.5 w-3.5" /> 添加
+        </Button>
+      </div>
     </div>
   )
 }
