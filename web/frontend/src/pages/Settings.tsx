@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { BellRing, GitBranch, Plus, RefreshCw, Replace, Save, Send, ShieldAlert, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { BellRing, GitBranch, Plus, RefreshCw, Replace, Save, Send, ShieldAlert, Trash2, Undo2 } from 'lucide-react'
 import { api, type AlertConfigInfo, type AlertRules, type IPACLConfig, type IPACLDefault, type IPACLEntry, type IPACLMode, type RewriteRule, type RouteRule, type RouteRuleType, type SettingsInfo } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input, Select } from '@/components/ui/input'
@@ -17,26 +17,73 @@ export default function Settings() {
   const [editing, setEditing] = useState<Record<number, string>>({})
   const [msg, setMsg] = useState('')
   const [saving, setSaving] = useState(false)
+  // 已保存基线（结构化，支持"回退"整体恢复）
+  const [baseline, setBaseline] = useState<{
+    rows: { url: string; weight: number; health_path: string }[]
+    strategy: string
+    rules: RouteRule[]
+    rewrites: RewriteRule[]
+  } | null>(null)
+  const baselineRef = useRef(baseline)
+  baselineRef.current = baseline
+  const dirtyRef = useRef(false)
 
-  const load = useCallback(() => {
+  const snapOf = (
+    rs: { url: string; weight: number; health_path: string }[],
+    st: string,
+    ru: RouteRule[],
+    rw: RewriteRule[],
+  ) => JSON.stringify({ rows: rs, strategy: st, rules: ru, rewrites: rw })
+
+  // 将服务器配置应用到本地（仅在无未保存改动时调用，避免轮询覆盖正在编辑的内容）
+  const applyServer = (d: SettingsInfo) => {
+    const rs = (d.backends ?? []).map((b) => ({ url: b.url, weight: b.weight ?? 1, health_path: b.health_path ?? '' }))
+    setRows(rs)
+    setStrategy(d.strategy)
+    setRules(d.rules ?? [])
+    setRewrites(d.rewrites ?? [])
+    setEditing({})
+    setBaseline({ rows: rs, strategy: d.strategy, rules: d.rules ?? [], rewrites: d.rewrites ?? [] })
+  }
+
+  // 回退到最近一次已保存的状态
+  const revert = () => {
+    const b = baselineRef.current
+    if (!b) return
+    setRows(b.rows)
+    setStrategy(b.strategy)
+    setRules(b.rules)
+    setRewrites(b.rewrites)
+    setEditing({})
+    setMsg('')
+  }
+
+  const load = useCallback((apply = false) => {
     api
       .get<SettingsInfo>('/api/settings')
       .then((d) => {
         setInfo(d)
-        setRows((d.backends ?? []).map((b) => ({ url: b.url, weight: b.weight ?? 1, health_path: b.health_path ?? '' })))
-        setStrategy(d.strategy)
-        setRules(d.rules ?? [])
-        setRewrites(d.rewrites ?? [])
+        if (apply || !dirtyRef.current) applyServer(d)
       })
       .catch(() => {})
   }, [])
 
   useEffect(() => {
-    load()
-    // 健康状态 30 秒刷新
-    const t = setInterval(load, 30000)
+    load(true)
+    // 健康状态 30 秒刷新；有未保存改动时只刷新健康徽标，不覆盖编辑内容
+    const t = setInterval(() => load(false), 30000)
     return () => clearInterval(t)
   }, [load])
+
+  // URL 编辑框的值并入行数据（保存时生效；顺带修复此前“编辑 URL 不落库”的缺陷）
+  const committedRows = rows.map((r, i) => {
+    const e = editing[i]
+    return e !== undefined && e.trim() !== '' ? { ...r, url: e.trim() } : r
+  })
+  const dirty = baseline !== null && snapOf(committedRows, strategy, rules, rewrites) !== snapOf(baseline.rows, baseline.strategy, baseline.rules, baseline.rewrites)
+  useEffect(() => {
+    dirtyRef.current = dirty
+  })
 
   const healthOf = (url: string) => (info?.backends ?? []).find((b) => b.url === url)?.healthy
 
@@ -62,9 +109,12 @@ export default function Settings() {
     setSaving(true)
     setMsg('')
     try {
-      await api.put('/api/settings/backends', { backends: rows, strategy, rules, rewrites })
-      load()
+      await api.put('/api/settings/backends', { backends: committedRows, strategy, rules, rewrites })
+      setRows(committedRows)
+      setEditing({})
+      setBaseline({ rows: committedRows, strategy, rules, rewrites })
       setMsg('已保存：立即生效，重启后保留')
+      load(true)
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '保存失败')
     } finally {
@@ -93,9 +143,9 @@ export default function Settings() {
                 <div key={i} className="flex items-center gap-2">
                   <span
                     className={`h-2.5 w-2.5 shrink-0 rounded-full ${
-                      healthy === undefined ? 'bg-muted-foreground/40' : healthy ? 'bg-emerald-500' : 'bg-red-500'
+                      healthy === undefined ? 'bg-amber-500' : healthy ? 'bg-emerald-500' : 'bg-red-500'
                     }`}
-                    title={healthy === undefined ? '健康状态未知' : healthy ? '健康' : '不可用'}
+                    title={healthy === undefined ? '待保存：尚未注册到网关，保存后开始健康检查' : healthy ? '健康' : '不可用'}
                   />
                   <Input
                     value={editing_}
@@ -294,7 +344,12 @@ export default function Settings() {
               <span className="text-xs text-amber-600 dark:text-amber-400">weighted 策略要求至少一个后端权重 &gt; 0</span>
             )}
             <div className="flex-1" />
-            <Button onClick={save} disabled={saving || rows.length === 0}>
+            {dirty && (
+              <Button variant="outline" onClick={revert} disabled={saving}>
+                <Undo2 className="h-4 w-4" /> 回退
+              </Button>
+            )}
+            <Button onClick={save} disabled={saving || rows.length === 0 || !dirty}>
               <Save className="h-4 w-4" /> {saving ? '保存中…' : '保存'}
             </Button>
           </div>
@@ -356,6 +411,8 @@ function IPACLCard() {
   const [whitelist, setWhitelist] = useState<IPACLEntry[]>([])
   const [msg, setMsg] = useState('')
   const [saving, setSaving] = useState(false)
+  // 已保存基线（结构化，支持"回退"整体恢复）
+  const [snapshot, setSnapshot] = useState<{ mode: IPACLMode; def: IPACLDefault; bl: IPACLEntry[]; wl: IPACLEntry[] } | null>(null)
 
   useEffect(() => {
     api
@@ -363,17 +420,38 @@ function IPACLCard() {
       .then((d) => {
         setMode(d.mode)
         setDef(d.default ?? 'allow')
-        setBlacklist(d.blacklist ?? [])
-        setWhitelist(d.whitelist ?? [])
+        setBlacklist((d.blacklist ?? []).map((e) => ({ value: e.value, note: e.note })))
+        setWhitelist((d.whitelist ?? []).map((e) => ({ value: e.value, note: e.note })))
+        setSnapshot({
+          mode: d.mode,
+          def: d.default ?? 'allow',
+          bl: (d.blacklist ?? []).map((e) => ({ value: e.value, note: e.note })),
+          wl: (d.whitelist ?? []).map((e) => ({ value: e.value, note: e.note })),
+        })
       })
       .catch(() => {})
   }, [])
+
+  const aclSnap = (m: IPACLMode, d: IPACLDefault, bl: IPACLEntry[], wl: IPACLEntry[]) =>
+    JSON.stringify({ m, d, bl: bl.map((e) => ({ value: e.value, note: e.note })), wl: wl.map((e) => ({ value: e.value, note: e.note })) })
+
+  const dirty = snapshot !== null && aclSnap(mode, def, blacklist, whitelist) !== aclSnap(snapshot.mode, snapshot.def, snapshot.bl, snapshot.wl)
+
+  const revert = () => {
+    if (!snapshot) return
+    setMode(snapshot.mode)
+    setDef(snapshot.def)
+    setBlacklist(snapshot.bl)
+    setWhitelist(snapshot.wl)
+    setMsg('')
+  }
 
   const save = async () => {
     setSaving(true)
     setMsg('')
     try {
       await api.put('/api/ip-acl', { mode, default: def, blacklist, whitelist })
+      setSnapshot({ mode, def, bl: blacklist, wl: whitelist })
       setMsg('已保存：立即生效，重启后保留')
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '保存失败')
@@ -448,7 +526,12 @@ function IPACLCard() {
         <div className="flex items-center gap-3 border-t pt-4">
           <p className="text-xs text-muted-foreground">保存时后端会校验全部条目，存在非法条目将整单拒绝</p>
           <div className="flex-1" />
-          <Button onClick={save} disabled={saving || denyAllRisk}>
+          {dirty && (
+            <Button variant="outline" onClick={revert} disabled={saving}>
+              <Undo2 className="h-4 w-4" /> 回退
+            </Button>
+          )}
+          <Button onClick={save} disabled={saving || denyAllRisk || !dirty}>
             <Save className="h-4 w-4" /> {saving ? '保存中…' : '保存'}
           </Button>
         </div>
@@ -569,6 +652,19 @@ function AlertCard() {
   const [msg, setMsg] = useState('')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
+  // 已保存基线（结构化，支持"回退"整体恢复）
+  const [snapshot, setSnapshot] = useState<AlertRules | null>(null)
+
+  const rulesSnap = (r: AlertRules) =>
+    JSON.stringify({
+      enabled: r.enabled,
+      error_rate_pct: r.error_rate_pct,
+      window_minutes: r.window_minutes,
+      min_sample: r.min_sample,
+      backend_down: r.backend_down,
+      latency_ms: r.latency_ms,
+      silence_minutes: r.silence_minutes,
+    })
 
   useEffect(() => {
     api
@@ -576,15 +672,25 @@ function AlertCard() {
       .then((d) => {
         setCfg(d)
         setRules(d.rules)
+        setSnapshot(d.rules)
       })
       .catch(() => {})
   }, [])
+
+  const dirty = snapshot !== null && rulesSnap(rules) !== rulesSnap(snapshot)
+
+  const revert = () => {
+    if (!snapshot) return
+    setRules(snapshot)
+    setMsg('')
+  }
 
   const save = async () => {
     setSaving(true)
     setMsg('')
     try {
       await api.put('/api/alert/config', rules)
+      setSnapshot(rules)
       setMsg('已保存：立即生效，重启后保留')
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '保存失败')
@@ -680,7 +786,12 @@ function AlertCard() {
             <Send className="h-4 w-4" /> {testing ? '发送中…' : '发送测试消息'}
           </Button>
           <div className="flex-1" />
-          <Button onClick={save} disabled={saving}>
+          {dirty && (
+            <Button variant="outline" onClick={revert} disabled={saving}>
+              <Undo2 className="h-4 w-4" /> 回退
+            </Button>
+          )}
+          <Button onClick={save} disabled={saving || !dirty}>
             <Save className="h-4 w-4" /> {saving ? '保存中…' : '保存'}
           </Button>
         </div>
