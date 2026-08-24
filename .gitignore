@@ -205,3 +205,10 @@ web/frontend/node_modules/
 !web/frontend/package.json
 !web/frontend/package-lock.json
 !web/frontend/tsconfig.json
+
+# 临时响应抓包文件（调试产物）
+resp*.txt
+
+# Python 诊断脚本
+_diag.py
+_inspect.py
