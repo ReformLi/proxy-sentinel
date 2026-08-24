@@ -112,6 +112,7 @@ export interface LogRecord {
   user_agent: string
   referer: string
   backend_url: string
+  request_id: string
   created_at: string
 }
 
@@ -166,4 +167,19 @@ export interface CreatedToken {
   token: string
   name: string
   rate_limit_rpm: number
+}
+
+export interface AlertRules {
+  enabled: boolean
+  error_rate_pct: number
+  window_minutes: number
+  min_sample: number
+  backend_down: boolean
+  silence_minutes: number
+}
+
+export interface AlertConfigInfo {
+  rules: AlertRules
+  dingtalk_configured: boolean
+  check_interval_seconds: number
 }

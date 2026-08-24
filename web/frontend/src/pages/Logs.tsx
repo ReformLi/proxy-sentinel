@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Download, Radio, Search } from 'lucide-react'
+import { Copy, Download, Fingerprint, Radio, Search } from 'lucide-react'
 import { api, type LogRecord, type PagedLogs } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input, Select } from '@/components/ui/input'
@@ -19,13 +19,14 @@ function statusVariant(status: number) {
 
 export default function Logs() {
   const [params] = useSearchParams()
-  // 筛选条件（backend_url 从流向图跳转带入）
+  // 筛选条件（backend_url 从流向图跳转带入，request_id 从详情弹窗"查同请求"带入）
   const [method, setMethod] = useState('')
   const [path, setPath] = useState('')
   const [keyword, setKeyword] = useState('')
   const [statusMin, setStatusMin] = useState('')
   const [minDuration, setMinDuration] = useState('')
   const [backend, setBackend] = useState(params.get('backend_url') ?? '')
+  const [requestId, setRequestId] = useState(params.get('request_id') ?? '')
 
   const [page, setPage] = useState(1)
   const [data, setData] = useState<PagedLogs | null>(null)
@@ -45,9 +46,10 @@ export default function Logs() {
       if (statusMin) q.set('status_min', statusMin)
       if (minDuration) q.set('min_duration', minDuration)
       if (backend) q.set('backend_url', backend)
+      if (requestId) q.set('request_id', requestId)
       return q
     },
-    [page, method, path, keyword, statusMin, minDuration, backend],
+    [page, method, path, keyword, statusMin, minDuration, backend, requestId],
   )
 
   const load = useCallback(() => {
@@ -119,6 +121,14 @@ export default function Logs() {
               </button>
             </Badge>
           )}
+          {requestId && (
+            <Badge variant="secondary" className="h-9 max-w-72 truncate">
+              链路: {requestId}
+              <button className="ml-1 text-muted-foreground hover:text-foreground" onClick={() => setRequestId('')} aria-label="清除链路筛选">
+                ×
+              </button>
+            </Badge>
+          )}
           <Button size="sm" onClick={() => { setPage(1); load() }}>
             <Search className="h-3.5 w-3.5" /> 查询
           </Button>
@@ -143,6 +153,7 @@ export default function Logs() {
                   <th className="px-3 py-2.5">路径</th>
                   <th className="px-3 py-2.5">状态</th>
                   <th className="px-3 py-2.5">耗时</th>
+                  <th className="px-3 py-2.5">链路 ID</th>
                   <th className="px-3 py-2.5">客户端 IP</th>
                   <th className="px-3 py-2.5">后端</th>
                   <th className="px-3 py-2.5">时间</th>
@@ -151,7 +162,7 @@ export default function Logs() {
               <tbody>
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
+                    <td colSpan={9} className="px-3 py-10 text-center text-muted-foreground">
                       {live ? '等待新日志流入…' : '暂无日志'}
                     </td>
                   </tr>
@@ -169,6 +180,24 @@ export default function Logs() {
                       <Badge variant={statusVariant(l.status)}>{l.status}</Badge>
                     </td>
                     <td className="px-3 py-2 tabular-nums">{l.duration} ms</td>
+                    <td
+                      className="max-w-44 truncate px-3 py-2 font-mono text-xs text-indigo-500 dark:text-indigo-400"
+                      title={l.request_id || undefined}
+                      onClick={(e) => {
+                        // 点击链路 ID：以该 ID 筛选列表（同一次请求的所有记录）
+                        if (l.request_id) {
+                          e.stopPropagation()
+                          setRequestId(l.request_id)
+                          setPage(1)
+                        }
+                      }}
+                    >
+                      {l.request_id ? (
+                        <span className="cursor-pointer hover:underline">{l.request_id}</span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 font-mono text-xs">{l.client_ip}</td>
                     <td className="max-w-56 truncate px-3 py-2 font-mono text-xs text-muted-foreground">{l.backend_url}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{fmtTime(l.created_at)}</td>
@@ -206,9 +235,11 @@ export default function Logs() {
 /** 日志详情：基础信息 + 请求/响应 Headers 与 Body（点击行时再拉取完整数据） */
 function LogDetailDialog({ log, onClose }: { log: LogRecord | null; onClose: () => void }) {
   const [full, setFull] = useState<LogRecord | null>(null)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     setFull(null)
+    setCopied(false)
     if (log) {
       api.get<LogRecord>(`/api/logs/${log.id}`).then(setFull).catch(() => setFull(log))
     }
@@ -216,6 +247,17 @@ function LogDetailDialog({ log, onClose }: { log: LogRecord | null; onClose: () 
 
   if (!log) return null
   const rec = full ?? log
+
+  const copyRequestId = async () => {
+    if (!rec.request_id) return
+    try {
+      await navigator.clipboard.writeText(rec.request_id)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      /* 剪贴板不可用时静默 */
+    }
+  }
 
   const prettyHeaders = (raw: string) => {
     try {
@@ -255,6 +297,21 @@ function LogDetailDialog({ log, onClose }: { log: LogRecord | null; onClose: () 
             </div>
           </div>
         </div>
+
+        {/* 链路标记：复制 + 查同请求所有记录 */}
+        {rec.request_id && (
+          <div className="flex items-center gap-2 rounded-md border border-indigo-500/30 bg-indigo-500/5 px-3 py-2">
+            <Fingerprint className="h-4 w-4 shrink-0 text-indigo-500 dark:text-indigo-400" />
+            <span className="text-xs text-muted-foreground">链路标记</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-indigo-600 dark:text-indigo-400">{rec.request_id}</span>
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={copyRequestId}>
+              <Copy className="h-3 w-3" /> {copied ? '已复制' : '复制'}
+            </Button>
+            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => window.open(`/logs?request_id=${encodeURIComponent(rec.request_id)}`, '_self')}>
+              查同请求
+            </Button>
+          </div>
+        )}
 
         <Section title="请求 Headers">
           <pre className="max-h-48 overflow-auto">{prettyHeaders(rec.request_headers)}</pre>

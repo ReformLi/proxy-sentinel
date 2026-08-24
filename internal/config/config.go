@@ -21,6 +21,7 @@ type Config struct {
 	Auth      AuthConfig      `yaml:"auth"`
 	Log       LogConfig       `yaml:"log"`
 	RateLimit RateLimitConfig `yaml:"rate_limit"`
+	Alert     AlertConfig     `yaml:"alert"`
 }
 
 type ServerConfig struct {
@@ -59,6 +60,18 @@ type LogConfig struct {
 // RateLimitConfig 限流配置：按 Token 维度限制每分钟请求数
 type RateLimitConfig struct {
 	DefaultRPM int `yaml:"default_rpm"` // 全局默认值（次/分钟/Token），0 = 不限流
+}
+
+// AlertConfig 告警配置：通知渠道凭据（规则阈值存数据库，页面可改）
+type AlertConfig struct {
+	CheckIntervalSeconds int             `yaml:"check_interval_seconds"` // 告警评估周期（秒），默认 30
+	DingTalk             DingTalkConfig  `yaml:"dingtalk"`
+}
+
+// DingTalkConfig 钉钉群机器人凭据（群设置 → 智能群助手 → 添加机器人 → 自定义）
+type DingTalkConfig struct {
+	WebhookURL string `yaml:"webhook_url"` // https://oapi.dingtalk.com/robot/send?access_token=xxx
+	Secret     string `yaml:"secret"`      // 加签密钥（机器人安全设置选"加签"时填，未开启则留空）
 }
 
 // LoadResult 描述配置加载过程，便于调用方打印诊断日志
@@ -280,6 +293,17 @@ func applyEnv(cfg *Config) {
 			cfg.RateLimit.DefaultRPM = n
 		}
 	}
+	if v := os.Getenv("ALERT_CHECK_INTERVAL_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Alert.CheckIntervalSeconds = n
+		}
+	}
+	if v := os.Getenv("ALERT_DINGTALK_WEBHOOK_URL"); v != "" {
+		cfg.Alert.DingTalk.WebhookURL = v
+	}
+	if v := os.Getenv("ALERT_DINGTALK_SECRET"); v != "" {
+		cfg.Alert.DingTalk.Secret = v
+	}
 }
 
 // 已知占位/弱默认值黑名单：出现即视为致命错误（防止带默认密钥上线）
@@ -326,6 +350,12 @@ func (c *Config) validate() ([]string, error) {
 	}
 	if c.RateLimit.DefaultRPM < 0 {
 		return nil, fmt.Errorf("限流默认值 rate_limit.default_rpm 不能为负数")
+	}
+	if c.Alert.CheckIntervalSeconds < 0 {
+		return nil, fmt.Errorf("告警评估周期 alert.check_interval_seconds 不能为负数")
+	}
+	if c.Alert.CheckIntervalSeconds > 0 && c.Alert.CheckIntervalSeconds < 5 {
+		return nil, fmt.Errorf("告警评估周期 alert.check_interval_seconds 不能小于 5 秒")
 	}
 	if c.Log.BodyMaxBytes <= 0 {
 		c.Log.BodyMaxBytes = 64 * 1024

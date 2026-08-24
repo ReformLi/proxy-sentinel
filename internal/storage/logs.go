@@ -23,6 +23,7 @@ type LogRecord struct {
 	UserAgent       string    `json:"user_agent"`
 	Referer         string    `json:"referer"`
 	BackendURL      string    `json:"backend_url"`
+	RequestID       string    `json:"request_id"` // 请求链路标记（X-Request-ID），同 ID = 同一次请求
 	CreatedAt       time.Time `json:"created_at"`
 }
 
@@ -37,6 +38,7 @@ type LogFilter struct {
 	MinDuration int64
 	Keyword     string // 在请求体/响应体中搜索
 	Backend     string // 精确匹配后端地址（流向图下钻）
+	RequestID   string // 精确匹配链路标记（日志详情下钻）
 	Page        int
 	PageSize    int
 }
@@ -44,11 +46,11 @@ type LogFilter struct {
 // InsertLog 插入一条日志记录（供 logger 异步写入调用）
 func (db *DB) InsertLog(ctx context.Context, r *LogRecord) error {
 	_, err := db.ExecContext(ctx, `INSERT INTO proxy_logs
-		(method, path, query, request_headers, request_body, status, response_headers, response_body, duration, client_ip, user_agent, referer, backend_url, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?);`,
+		(method, path, query, request_headers, request_body, status, response_headers, response_body, duration, client_ip, user_agent, referer, backend_url, request_id, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`,
 		r.Method, r.Path, r.Query, r.RequestHeaders, r.RequestBody,
 		r.Status, r.ResponseHeaders, r.ResponseBody, r.Duration,
-		r.ClientIP, r.UserAgent, r.Referer, r.BackendURL, r.CreatedAt,
+		r.ClientIP, r.UserAgent, r.Referer, r.BackendURL, r.RequestID, r.CreatedAt,
 	)
 	return err
 }
@@ -63,8 +65,8 @@ func (db *DB) InsertLogs(ctx context.Context, recs []*LogRecord) error {
 		return err
 	}
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO proxy_logs
-		(method, path, query, request_headers, request_body, status, response_headers, response_body, duration, client_ip, user_agent, referer, backend_url, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?);`)
+		(method, path, query, request_headers, request_body, status, response_headers, response_body, duration, client_ip, user_agent, referer, backend_url, request_id, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);`)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -73,7 +75,7 @@ func (db *DB) InsertLogs(ctx context.Context, recs []*LogRecord) error {
 		if _, err := stmt.ExecContext(ctx,
 			r.Method, r.Path, r.Query, r.RequestHeaders, r.RequestBody,
 			r.Status, r.ResponseHeaders, r.ResponseBody, r.Duration,
-			r.ClientIP, r.UserAgent, r.Referer, r.BackendURL, r.CreatedAt,
+			r.ClientIP, r.UserAgent, r.Referer, r.BackendURL, r.RequestID, r.CreatedAt,
 		); err != nil {
 			tx.Rollback()
 			return err
@@ -99,7 +101,7 @@ func (db *DB) ListLogs(ctx context.Context, f LogFilter) ([]LogRecord, error) {
 		f.PageSize = 50
 	}
 	offset := (f.Page - 1) * f.PageSize
-	q := `SELECT id, method, path, query, request_headers, request_body, status, response_headers, response_body, duration, client_ip, user_agent, referer, backend_url, created_at FROM proxy_logs`
+	q := `SELECT id, method, path, query, request_headers, request_body, status, response_headers, response_body, duration, client_ip, user_agent, referer, backend_url, request_id, created_at FROM proxy_logs`
 	where, whereArgs := buildWhere(f)
 	if where != "" {
 		q += " " + where
@@ -117,11 +119,11 @@ func (db *DB) ListLogs(ctx context.Context, f LogFilter) ([]LogRecord, error) {
 
 // GetLog 获取单条日志详情
 func (db *DB) GetLog(ctx context.Context, id int64) (*LogRecord, error) {
-	row := db.QueryRowContext(ctx, `SELECT id, method, path, query, request_headers, request_body, status, response_headers, response_body, duration, client_ip, user_agent, referer, backend_url, created_at FROM proxy_logs WHERE id=?`, id)
+	row := db.QueryRowContext(ctx, `SELECT id, method, path, query, request_headers, request_body, status, response_headers, response_body, duration, client_ip, user_agent, referer, backend_url, request_id, created_at FROM proxy_logs WHERE id=?`, id)
 	r := &LogRecord{}
 	err := row.Scan(&r.ID, &r.Method, &r.Path, &r.Query, &r.RequestHeaders, &r.RequestBody,
 		&r.Status, &r.ResponseHeaders, &r.ResponseBody, &r.Duration,
-		&r.ClientIP, &r.UserAgent, &r.Referer, &r.BackendURL, &r.CreatedAt)
+		&r.ClientIP, &r.UserAgent, &r.Referer, &r.BackendURL, &r.RequestID, &r.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -177,6 +179,10 @@ func buildWhere(f LogFilter) (string, []any) {
 		conds = append(conds, "backend_url = ?")
 		args = append(args, f.Backend)
 	}
+	if f.RequestID != "" {
+		conds = append(conds, "request_id = ?")
+		args = append(args, f.RequestID)
+	}
 	if len(conds) == 0 {
 		return "", nil
 	}
@@ -189,7 +195,7 @@ func scanLogs(rows *sql.Rows) ([]LogRecord, error) {
 		var r LogRecord
 		if err := rows.Scan(&r.ID, &r.Method, &r.Path, &r.Query, &r.RequestHeaders, &r.RequestBody,
 			&r.Status, &r.ResponseHeaders, &r.ResponseBody, &r.Duration,
-			&r.ClientIP, &r.UserAgent, &r.Referer, &r.BackendURL, &r.CreatedAt); err != nil {
+			&r.ClientIP, &r.UserAgent, &r.Referer, &r.BackendURL, &r.RequestID, &r.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"proxy-sentinel/internal/alert"
 	"proxy-sentinel/internal/auth"
 	"proxy-sentinel/internal/config"
 	"proxy-sentinel/internal/logger"
@@ -33,6 +34,7 @@ type Server struct {
 	loginLimit *loginLimiter
 	limiter    *ratelimit.Limiter
 	stopLimiterSweep func()
+	alertEngine *alert.Engine
 	adminUser  string
 	secure     bool
 }
@@ -50,6 +52,7 @@ func NewServer(
 	balancer proxy.DynamicManager,
 	proxyH *proxy.Handler,
 	cfg *config.Config,
+	alertEngine *alert.Engine,
 	adminUser string,
 	secure bool,
 ) *Server {
@@ -68,6 +71,7 @@ func NewServer(
 		cfg:        cfg,
 		loginLimit: newLoginLimiter(5, 15*60),
 		limiter:    limiter,
+		alertEngine: alertEngine,
 		adminUser:  adminUser,
 		secure:     secure,
 	}
@@ -140,6 +144,11 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("POST /api/tokens", webJSON(http.HandlerFunc(s.createToken)))
 	mux.Handle("PUT /api/tokens/{id}", webJSON(http.HandlerFunc(s.updateToken)))
 	mux.Handle("DELETE /api/tokens/{id}", webJSON(http.HandlerFunc(s.deleteToken)))
+
+	// 告警通知（规则热更新 + 连通性测试）
+	mux.Handle("GET /api/alert/config", webJSON(http.HandlerFunc(s.getAlertConfig)))
+	mux.Handle("PUT /api/alert/config", webJSON(http.HandlerFunc(s.updateAlertConfig)))
+	mux.Handle("POST /api/alert/test", webJSON(http.HandlerFunc(s.testAlert)))
 
 	// 反向代理路由（Bearer Token 认证 + 按 Token 限流）
 	mux.Handle("/proxy/", s.proxyAuth.Middleware(s.rateLimitMiddleware(s.proxyH)))

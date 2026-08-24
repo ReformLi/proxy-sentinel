@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"proxy-sentinel/internal/alert"
 	"proxy-sentinel/internal/api"
 	"proxy-sentinel/internal/auth"
 	"proxy-sentinel/internal/config"
@@ -102,16 +103,27 @@ func main() {
 	proxyHandler := proxy.NewHandler(balancer, logWriter, cfg.Proxy.TimeoutSeconds,
 		int64(cfg.Proxy.MaxBodyBytes), int64(cfg.Log.BodyMaxBytes), cfg.Proxy.TrustForwardedHeaders)
 
-	// 6. 统计服务 + API Server
+	// 6. 统计服务 + 告警引擎 + API Server
 	realtimeSvc := stats.NewRealtimeService(db)
 	trendSvc := stats.NewTrendService(db)
 	flowSvc := stats.NewFlowService(db)
+
+	var ding *alert.DingTalk
+	if cfg.Alert.DingTalk.WebhookURL != "" {
+		ding = alert.NewDingTalk(cfg.Alert.DingTalk.WebhookURL, cfg.Alert.DingTalk.Secret)
+		log.Printf("告警通知：钉钉 webhook 已配置（评估周期 %d 秒）", cfg.Alert.CheckIntervalSeconds)
+	} else {
+		log.Printf("告警通知：未配置钉钉 webhook（config.yaml → alert.dingtalk.webhook_url），告警引擎空转")
+	}
+	alertEngine := alert.NewEngine(db, balancer, ding, cfg.Alert.CheckIntervalSeconds)
+	alertEngine.Start()
+	defer alertEngine.Stop()
 
 	server := api.NewServer(
 		db, jwtMgr, webAuth, proxyAuth,
 		realtimeSvc, trendSvc, flowSvc,
 		logWriter, balancer, proxyHandler,
-		cfg, cfg.Auth.AdminUsername, secure,
+		cfg, alertEngine, cfg.Auth.AdminUsername, secure,
 	)
 	defer server.Close()
 

@@ -46,6 +46,16 @@ func (db *DB) GetRealtimeStats(ctx context.Context) (*RealtimeStats, error) {
 	return s, nil
 }
 
+// GetWindowCounts 统计指定时间以来的总请求数与 5xx 数量（告警引擎错误率评估用）
+func (db *DB) GetWindowCounts(ctx context.Context, from time.Time) (total, errCount int64, err error) {
+	q := `SELECT COUNT(*), COALESCE(SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END), 0)
+		FROM proxy_logs WHERE created_at >= ?`
+	if err := db.QueryRowContext(ctx, q, from).Scan(&total, &errCount); err != nil {
+		return 0, 0, err
+	}
+	return total, errCount, nil
+}
+
 // TrendPoint 趋势数据点
 type TrendPoint struct {
 	TS          time.Time `json:"ts"`

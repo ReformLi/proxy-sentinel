@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
-import { api, type SettingsInfo } from '@/lib/api'
+import { BellRing, Plus, RefreshCw, Save, Send, Trash2 } from 'lucide-react'
+import { api, type AlertConfigInfo, type AlertRules, type SettingsInfo } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input, Select } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -184,6 +184,198 @@ export default function Settings() {
           </CardContent>
         </Card>
       </div>
+
+      {/* 告警通知 */}
+      <AlertCard />
+    </div>
+  )
+}
+
+/** 空输入按 0 处理 */
+const toNum = (v: string) => (v === '' ? 0 : Number(v))
+
+/** 告警通知（钉钉）：规则阈值存数据库改完即生效；webhook 凭据在 config.yaml 配置 */
+function AlertCard() {
+  const [cfg, setCfg] = useState<AlertConfigInfo | null>(null)
+  const [rules, setRules] = useState<AlertRules>({
+    enabled: false,
+    error_rate_pct: 10,
+    window_minutes: 5,
+    min_sample: 20,
+    backend_down: true,
+    silence_minutes: 10,
+  })
+  const [msg, setMsg] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+
+  useEffect(() => {
+    api
+      .get<AlertConfigInfo>('/api/alert/config')
+      .then((d) => {
+        setCfg(d)
+        setRules(d.rules)
+      })
+      .catch(() => {})
+  }, [])
+
+  const save = async () => {
+    setSaving(true)
+    setMsg('')
+    try {
+      await api.put('/api/alert/config', rules)
+      setMsg('已保存：立即生效，重启后保留')
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const test = async () => {
+    setTesting(true)
+    setMsg('')
+    try {
+      const r = await api.post<{ message: string }>('/api/alert/test')
+      setMsg(r.message)
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '发送失败')
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <BellRing className="h-4 w-4" /> 告警通知（钉钉）
+        </CardTitle>
+        <CardDescription>
+          规则保存后立即生效（每 {cfg?.check_interval_seconds ?? 30} 秒评估一次）；webhook 地址在 config.yaml → alert.dingtalk 配置，修改后重启生效
+          {cfg?.dingtalk_configured ? (
+            <Badge variant="default" className="ml-2 bg-emerald-600">webhook 已配置</Badge>
+          ) : (
+            <Badge variant="destructive" className="ml-2">webhook 未配置</Badge>
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!cfg?.dingtalk_configured && (
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:text-amber-400">
+            尚未配置钉钉机器人：钉钉群 → 群设置 → 智能群助手 → 添加机器人（自定义），把 webhook 地址填入 config.yaml 的
+            alert.dingtalk.webhook_url（安全设置选"加签"时把 SEC 密钥填入 secret），重启后即可发送通知。
+          </p>
+        )}
+
+        <CheckRow
+          label="启用告警"
+          hint="关闭后引擎停止评估（规则保留）"
+          checked={rules.enabled}
+          onChange={(v) => setRules({ ...rules, enabled: v })}
+        />
+        <CheckRow
+          label="后端宕机 / 恢复通知"
+          hint="节点被健康检查剔除或恢复时推送"
+          checked={rules.backend_down}
+          onChange={(v) => setRules({ ...rules, backend_down: v })}
+        />
+
+        <div className="grid gap-4 sm:grid-cols-4">
+          <NumField
+            label="错误率阈值 (%)"
+            hint="窗口内 5xx 占比超过该值时告警，0 = 关闭"
+            value={rules.error_rate_pct}
+            onChange={(v) => setRules({ ...rules, error_rate_pct: v })}
+          />
+          <NumField
+            label="统计窗口（分钟）"
+            hint="错误率统计的时间窗口"
+            value={rules.window_minutes}
+            onChange={(v) => setRules({ ...rules, window_minutes: v })}
+          />
+          <NumField
+            label="最小样本量"
+            hint="窗口内请求数不足时不判定，防误报"
+            value={rules.min_sample}
+            onChange={(v) => setRules({ ...rules, min_sample: v })}
+          />
+          <NumField
+            label="静默期（分钟）"
+            hint="同一告警在该时间内不重复发送"
+            value={rules.silence_minutes}
+            onChange={(v) => setRules({ ...rules, silence_minutes: v })}
+          />
+        </div>
+
+        <div className="flex items-center gap-3 border-t pt-4">
+          <Button variant="outline" onClick={test} disabled={testing || !cfg?.dingtalk_configured}>
+            <Send className="h-4 w-4" /> {testing ? '发送中…' : '发送测试消息'}
+          </Button>
+          <div className="flex-1" />
+          <Button onClick={save} disabled={saving}>
+            <Save className="h-4 w-4" /> {saving ? '保存中…' : '保存'}
+          </Button>
+        </div>
+        {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** 开关行（原生 checkbox + 样式包装） */
+function CheckRow({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string
+  hint?: string
+  checked: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <label className="flex cursor-pointer items-center gap-3">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="h-4 w-4 shrink-0 cursor-pointer accent-primary"
+      />
+      <span className="text-sm font-medium">{label}</span>
+      {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
+    </label>
+  )
+}
+
+/** 数字输入字段（带标签与提示） */
+function NumField({
+  label,
+  hint,
+  value,
+  onChange,
+}: {
+  label: string
+  hint?: string
+  value: number
+  onChange: (v: number) => void
+}) {
+  const [text, setText] = useState(String(value))
+  useEffect(() => setText(String(value)), [value])
+  return (
+    <div className="space-y-1.5">
+      <label className="text-sm font-medium">{label}</label>
+      <Input
+        type="number"
+        min={0}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value)
+          onChange(toNum(e.target.value))
+        }}
+      />
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
 }

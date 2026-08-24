@@ -26,6 +26,7 @@ func parseLogFilter(r *http.Request) storage.LogFilter {
 		Path:      q.Get("path"),
 		Keyword:   q.Get("keyword"),
 		Backend:   q.Get("backend_url"),
+		RequestID: q.Get("request_id"),
 		Page:      atoiDefault(q.Get("page"), 1),
 		PageSize:  atoiDefault(q.Get("page_size"), 50),
 	}
@@ -143,6 +144,7 @@ func (s *Server) streamLogs(w http.ResponseWriter, r *http.Request) {
 				"duration":    rec.Duration,
 				"backend_url": rec.BackendURL,
 				"client_ip":   rec.ClientIP,
+				"request_id":  rec.RequestID,
 				"created_at":  rec.CreatedAt.Format(time.RFC3339),
 			})
 			if err != nil {
@@ -170,7 +172,7 @@ func (s *Server) exportCSV(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=\""+filename+"\"")
 
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"id", "method", "path", "query", "status", "duration_ms", "client_ip", "user_agent", "backend_url", "created_at"})
+	_ = cw.Write([]string{"id", "method", "path", "query", "status", "duration_ms", "client_ip", "user_agent", "backend_url", "request_id", "created_at"})
 	for _, l := range logs {
 		_ = cw.Write([]string{
 			strconv.FormatInt(l.ID, 10),
@@ -182,6 +184,7 @@ func (s *Server) exportCSV(w http.ResponseWriter, r *http.Request) {
 			sanitizeCSV(l.ClientIP),
 			sanitizeCSV(l.UserAgent),
 			sanitizeCSV(l.BackendURL),
+			sanitizeCSV(l.RequestID),
 			l.CreatedAt.Format(time.RFC3339),
 		})
 	}

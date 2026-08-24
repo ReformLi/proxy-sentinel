@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net"
@@ -52,6 +54,10 @@ func NewHandler(b Balancer, lw *logger.Writer, timeoutSec int, maxBodyBytes, log
 
 // ServeHTTP 处理 /proxy/* 请求
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// 请求链路标记：客户端带了合法 X-Request-ID 则复用（跨系统排障串联），否则生成
+	requestID := resolveRequestID(r.Header.Get("X-Request-ID"))
+	w.Header().Set("X-Request-ID", requestID) // 回写响应头，客户端报障时可直接提供 ID
+
 	backend := h.balancer.Next()
 	if backend == "" {
 		writeJSONError(w, http.StatusBadGateway, "no available backend")
@@ -105,6 +111,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			appendXFF(req, client, h.trustXFF)
 			req.Header.Set("X-Forwarded-Proto", scheme(r))
 			req.Header.Set("X-Forwarded-Host", r.Host)
+			req.Header.Set("X-Request-ID", requestID) // 透传给后端，便于全链路对齐
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			rec.setStatus(resp.StatusCode)
@@ -123,7 +130,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(ctx)
 	proxy.ServeHTTP(rec, r)
 
-	// 记录日志（请求体按日志上限截断存储）
+	// 记录日志（请求体按日志上限截断存储；logger 缺失时跳过记录不影响转发）
+	if h.logger != nil {
+		h.writeLog(r, reqBody, rec, start, client, backend, requestID)
+	}
+}
+
+func (h *Handler) writeLog(r *http.Request, reqBody []byte, rec *responseRecorder, start time.Time, client, backend, requestID string) {
 	h.logger.Write(&storage.LogRecord{
 		Method:          r.Method,
 		Path:            r.URL.Path,
@@ -138,8 +151,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		UserAgent:       r.UserAgent(),
 		Referer:         r.Referer(),
 		BackendURL:      backend,
+		RequestID:       requestID,
 		CreatedAt:       start,
 	})
+}
+
+// resolveRequestID 复用入站 X-Request-ID 或生成新 ID（"req-" + 16 位十六进制）
+// 入站值仅接受 8~128 位可打印 ASCII（防头注入与脏数据），否则忽略并重新生成
+func resolveRequestID(inbound string) string {
+	if inbound != "" && len(inbound) >= 8 && len(inbound) <= 128 {
+		ok := true
+		for i := 0; i < len(inbound); i++ {
+			if inbound[i] < 0x21 || inbound[i] > 0x7E { // 非可打印 ASCII（含空格）即拒绝
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return inbound
+		}
+	}
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand 失败极罕见，退化为时间戳保证功能可用
+		return "req-" + strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return "req-" + hex.EncodeToString(b[:])
 }
 
 // responseRecorder 包装 ResponseWriter 以捕获状态码、响应头和响应体（截断）

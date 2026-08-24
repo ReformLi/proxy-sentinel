@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS proxy_logs (
   user_agent TEXT,
   referer TEXT,
   backend_url TEXT,
+  request_id TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_path ON proxy_logs(path);
@@ -113,7 +114,15 @@ func (db *DB) migrate() error {
 		return err
 	}
 	// 增量列迁移：CREATE TABLE IF NOT EXISTS 不会给已存在的表补列
-	return db.addColumnIfMissing("proxy_tokens", "rate_limit_rpm", "INTEGER DEFAULT 0")
+	if err := db.addColumnIfMissing("proxy_tokens", "rate_limit_rpm", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("proxy_logs", "request_id", "TEXT"); err != nil {
+		return err
+	}
+	// request_id 索引须在补列之后创建（旧表建列前无法建索引，故不放在 schemaSQL）
+	_, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_request_id ON proxy_logs(request_id)")
+	return err
 }
 
 // addColumnIfMissing 若表中不存在指定列则执行 ALTER TABLE ADD COLUMN
