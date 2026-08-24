@@ -138,10 +138,17 @@ export interface RouteRule {
   backend: string
 }
 
+export interface RewriteRule {
+  prefix: string
+  replacement: string
+  backend: string
+}
+
 export interface SettingsInfo {
   backends: BackendStat[] | null
   strategy: string
   rules: RouteRule[] | null
+  rewrites: RewriteRule[] | null
   log: {
     level: string
     sample_rate: number

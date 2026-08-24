@@ -92,6 +92,10 @@ func main() {
 	if len(rules) > 0 {
 		log.Printf("已加载定向分流规则 %d 条", len(rules))
 	}
+	rewrites, _, _ := db.GetSettingRewrites(context.Background())
+	if len(rewrites) > 0 {
+		log.Printf("已加载路径重写规则 %d 条", len(rewrites))
+	}
 
 	// 4. 创建认证组件
 	secure := os.Getenv("SECURE_COOKIE") == "true"
@@ -111,6 +115,7 @@ func main() {
 	proxyHandler := proxy.NewHandler(balancer, logWriter, cfg.Proxy.TimeoutSeconds,
 		int64(cfg.Proxy.MaxBodyBytes), int64(cfg.Log.BodyMaxBytes), cfg.Proxy.TrustForwardedHeaders)
 	proxyHandler.SetRules(rules)
+	proxyHandler.SetRewrites(rewrites)
 
 	// 6. 统计服务 + 告警引擎 + API Server
 	realtimeSvc := stats.NewRealtimeService(db)

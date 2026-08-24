@@ -12,13 +12,14 @@ import (
 
 // settingsInfo GET /api/settings 响应结构
 type settingsInfo struct {
-	Backends  []proxy.BackendStat  `json:"backends"`
-	Strategy  string               `json:"strategy"`
-	Rules     []storage.RouteRule  `json:"rules"`
-	Log       logSettings          `json:"log"`
-	Proxy     proxySettings        `json:"proxy"`
-	RateLimit rateLimitSettings    `json:"rate_limit"`
-	Managed   bool                 `json:"managed"` // 后端列表是否由数据库持久化管理（优先于 config.yaml）
+	Backends  []proxy.BackendStat   `json:"backends"`
+	Strategy  string                `json:"strategy"`
+	Rules     []storage.RouteRule   `json:"rules"`
+	Rewrites  []storage.RewriteRule `json:"rewrites"`
+	Log       logSettings           `json:"log"`
+	Proxy     proxySettings         `json:"proxy"`
+	RateLimit rateLimitSettings     `json:"rate_limit"`
+	Managed   bool                  `json:"managed"` // 后端列表是否由数据库持久化管理（优先于 config.yaml）
 }
 
 type logSettings struct {
@@ -42,7 +43,8 @@ type rateLimitSettings struct {
 type updateBackendsRequest struct {
 	Backends []storage.WeightedBackend `json:"backends"`
 	Strategy string                    `json:"strategy"`
-	Rules    *[]storage.RouteRule      `json:"rules"` // 指针区分"未传"（保持现状）与"传空数组"（清空规则）
+	Rules    *[]storage.RouteRule      `json:"rules"`     // 指针区分"未传"（保持现状）与"传空数组"（清空规则）
+	Rewrites *[]storage.RewriteRule    `json:"rewrites"`  // 同上
 }
 
 // getSettings GET /api/settings —— 当前生效配置（含后端健康状态）
@@ -52,10 +54,15 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	if rules == nil {
 		rules = []storage.RouteRule{}
 	}
+	rewrites, _, _ := s.db.GetSettingRewrites(r.Context())
+	if rewrites == nil {
+		rewrites = []storage.RewriteRule{}
+	}
 	writeJSON(w, http.StatusOK, settingsInfo{
 		Backends: s.balancer.Backends(),
 		Strategy: s.balancer.Strategy(),
 		Rules:    rules,
+		Rewrites: rewrites,
 		Log:      logSettings{
 			Level:         s.cfg.Log.Level,
 			SampleRate:    s.cfg.Log.SampleRate,
@@ -146,6 +153,16 @@ func (s *Server) updateBackends(w http.ResponseWriter, r *http.Request) {
 		rules = *req.Rules
 	}
 
+	// 路径重写规则：未传保持现状；传入则校验
+	rewrites := s.proxyH.LoadRewrites()
+	if req.Rewrites != nil {
+		if err := proxy.ValidateRewrites(*req.Rewrites, backends); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		rewrites = *req.Rewrites
+	}
+
 	// 1. 持久化到数据库（重启后仍生效，优先于 config.yaml）
 	if err := s.db.SetSettingBackends(r.Context(), backends); err != nil {
 		writeError(w, http.StatusInternalServerError, "持久化后端列表失败: "+err.Error())
@@ -161,6 +178,12 @@ func (s *Server) updateBackends(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if req.Rewrites != nil {
+		if err := s.db.SetSettingRewrites(r.Context(), rewrites); err != nil {
+			writeError(w, http.StatusInternalServerError, "持久化重写规则失败: "+err.Error())
+			return
+		}
+	}
 	// 2. 运行时热更新
 	s.balancer.SetBackends(backends)
 	if err := s.balancer.SetStrategy(strategy); err != nil {
@@ -170,6 +193,9 @@ func (s *Server) updateBackends(w http.ResponseWriter, r *http.Request) {
 	if req.Rules != nil {
 		s.proxyH.SetRules(rules)
 	}
+	if req.Rewrites != nil {
+		s.proxyH.SetRewrites(rewrites)
+	}
 
 	auth.Audit(auditCtx(r), s.db, auth.UsernameFromContext(r.Context()), "settings_backends_updated", ipFromRequest(r))
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -177,6 +203,7 @@ func (s *Server) updateBackends(w http.ResponseWriter, r *http.Request) {
 		"backends": s.balancer.Backends(),
 		"strategy": s.balancer.Strategy(),
 		"rules":    len(rules),
+		"rewrites": len(rewrites),
 	})
 }
 

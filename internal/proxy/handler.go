@@ -35,6 +35,7 @@ type Handler struct {
 	transport    http.RoundTripper
 
 	rules atomic.Pointer[RuleMatcher] // 定向分流规则（灰度发布），原子替换热生效
+	rewrites atomic.Pointer[Rewriter] // 路径重写规则，原子替换热生效
 }
 
 // NewHandler 创建反向代理处理器
@@ -53,8 +54,25 @@ func NewHandler(b Balancer, lw *logger.Writer, timeoutSec int, maxBodyBytes, log
 			ResponseHeaderTimeout: time.Duration(timeoutSec) * time.Second,
 		},
 	}
-	h.SetRules(nil) // 初始化空规则，避免每次请求 nil 判断
+	h.SetRules(nil)     // 初始化空规则，避免每次请求 nil 判断
+	h.SetRewrites(nil)
 	return h
+}
+
+// SetRewrites 热更新路径重写规则（空切片 = 清空；nil = 清空）
+func (h *Handler) SetRewrites(rules []storage.RewriteRule) {
+	if rules == nil {
+		rules = []storage.RewriteRule{}
+	}
+	h.rewrites.Store(NewRewriter(rules))
+}
+
+// LoadRewrites 返回当前生效的重写规则（供 API 回显）
+func (h *Handler) LoadRewrites() []storage.RewriteRule {
+	if rw := h.rewrites.Load(); rw != nil {
+		return rw.rules
+	}
+	return []storage.RewriteRule{}
 }
 
 // SetRules 热更新定向分流规则（空切片 = 清空规则；nil = 不变）
@@ -121,8 +139,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 日志缓冲使用独立的截断上限，避免大响应把内存撑爆
 	rec := newResponseRecorder(w, h.logBodyMax)
 
-	// 计算转发路径：剥离 /proxy 前缀，并保留 backend URL 自带的路径前缀
-	forwardPath := joinURLPath(target.Path, strippedPath)
+	// 计算转发路径：先按重写规则替换前缀（仅对已选定后端生效的规则），
+	// 再拼接 backend URL 自带的路径前缀。日志记录的仍是客户端原始路径。
+	forwardPath := joinURLPath(target.Path, h.rewrites.Load().Apply(strippedPath, backend))
 
 	// 在代理前确定客户端 IP（用于日志与 XFF），避免被伪造头污染
 	client := h.clientIP(r)

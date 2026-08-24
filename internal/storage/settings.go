@@ -11,7 +11,8 @@ const (
 	SettingBackends = "backends"          // JSON 数组：运行时管理的后端列表（优先于 config.yaml）
 	SettingStrategy = "balancer_strategy" // 负载均衡策略
 	SettingIPACL    = "ip_acl"            // JSON 对象：代理入口 IP 黑白名单（模式 + 条目）
-	SettingRules    = "route_rules"       // JSON 数组：定向分流规则（灰度发布）
+	SettingRules     = "route_rules"      // JSON 数组：定向分流规则（灰度发布）
+	SettingRewrites  = "path_rewrites"    // JSON 数组：路径重写规则
 )
 
 // WeightedBackend 带权重的后端（灰度发布：权重 = 流量比例，0 = 不接流量但保留健康检查）
@@ -26,6 +27,13 @@ type RouteRule struct {
 	Key     string `json:"key"`     // header/cookie 名；path 类型时留空
 	Value   string `json:"value"`   // header/cookie 精确匹配；path 前缀匹配
 	Backend string `json:"backend"` // 命中后路由到的后端 URL
+}
+
+// RewriteRule 路径重写规则：前缀替换（Nginx proxy_pass 风格）
+type RewriteRule struct {
+	Prefix      string `json:"prefix"`      // 匹配的路径前缀（以 / 开头）
+	Replacement string `json:"replacement"` // 替换为（空 = 剥离前缀；非空需以 / 开头）
+	Backend     string `json:"backend"`     // 可选：仅对该后端生效（空 = 全部后端）
 }
 
 // GetSetting 读取一项设置；不存在时返回 ("", false, nil)
@@ -101,6 +109,28 @@ func (db *DB) SetSettingRules(ctx context.Context, rules []RouteRule) error {
 		return err
 	}
 	return db.SetSetting(ctx, SettingRules, string(b))
+}
+
+// GetSettingRewrites 读取路径重写规则
+func (db *DB) GetSettingRewrites(ctx context.Context) ([]RewriteRule, bool, error) {
+	v, ok, err := db.GetSetting(ctx, SettingRewrites)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	var rules []RewriteRule
+	if err := json.Unmarshal([]byte(v), &rules); err != nil {
+		return nil, false, nil
+	}
+	return rules, true, nil
+}
+
+// SetSettingRewrites 持久化路径重写规则（合法性由调用方校验）
+func (db *DB) SetSettingRewrites(ctx context.Context, rules []RewriteRule) error {
+	b, err := json.Marshal(rules)
+	if err != nil {
+		return err
+	}
+	return db.SetSetting(ctx, SettingRewrites, string(b))
 }
 
 // GetSettingIPACL 读取 IP 黑白名单配置；不存在时 ok=false（调用方用空配置兜底）

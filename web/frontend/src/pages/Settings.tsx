@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { BellRing, GitBranch, Plus, RefreshCw, Save, Send, ShieldAlert, Trash2 } from 'lucide-react'
-import { api, type AlertConfigInfo, type AlertRules, type IPACLConfig, type IPACLDefault, type IPACLEntry, type IPACLMode, type RouteRule, type RouteRuleType, type SettingsInfo } from '@/lib/api'
+import { BellRing, GitBranch, Plus, RefreshCw, Replace, Save, Send, ShieldAlert, Trash2 } from 'lucide-react'
+import { api, type AlertConfigInfo, type AlertRules, type IPACLConfig, type IPACLDefault, type IPACLEntry, type IPACLMode, type RewriteRule, type RouteRule, type RouteRuleType, type SettingsInfo } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input, Select } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +12,7 @@ export default function Settings() {
   const [rows, setRows] = useState<{ url: string; weight: number }[]>([])
   const [strategy, setStrategy] = useState('round_robin')
   const [rules, setRules] = useState<RouteRule[]>([])
+  const [rewrites, setRewrites] = useState<RewriteRule[]>([])
   const [newUrl, setNewUrl] = useState('')
   const [editing, setEditing] = useState<Record<number, string>>({})
   const [msg, setMsg] = useState('')
@@ -25,6 +26,7 @@ export default function Settings() {
         setRows((d.backends ?? []).map((b) => ({ url: b.url, weight: b.weight ?? 1 })))
         setStrategy(d.strategy)
         setRules(d.rules ?? [])
+        setRewrites(d.rewrites ?? [])
       })
       .catch(() => {})
   }, [])
@@ -60,7 +62,7 @@ export default function Settings() {
     setSaving(true)
     setMsg('')
     try {
-      await api.put('/api/settings/backends', { backends: rows, strategy, rules })
+      await api.put('/api/settings/backends', { backends: rows, strategy, rules, rewrites })
       load()
       setMsg('已保存：立即生效，重启后保留')
     } catch (e) {
@@ -211,6 +213,56 @@ export default function Settings() {
                 <Plus className="h-3.5 w-3.5" /> 添加规则
               </Button>
               {rules.length === 0 && <span className="text-xs text-muted-foreground">无规则：所有流量走负载均衡策略</span>}
+            </div>
+          </div>
+
+          {/* 路径重写规则 */}
+          <div className="space-y-2 rounded-lg border p-3">
+            <div className="flex items-center gap-2">
+              <Replace className="h-4 w-4 text-amber-500" />
+              <span className="text-sm font-semibold">路径重写规则</span>
+              <span className="text-xs text-muted-foreground">
+                转发前替换路径前缀（如 /api/v1 → /v1）；自上而下第一条命中生效，日志记录原始路径
+              </span>
+            </div>
+            {rewrites.map((rw, i) => (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <Input
+                  placeholder="匹配前缀（如 /api/v1）"
+                  value={rw.prefix}
+                  onChange={(e) => setRewrites((s) => s.map((x, j) => (j === i ? { ...x, prefix: e.target.value } : x)))}
+                  className="w-44 font-mono text-xs"
+                />
+                <span className="text-xs text-muted-foreground">→</span>
+                <Input
+                  placeholder="替换为（留空 = 剥离前缀）"
+                  value={rw.replacement}
+                  onChange={(e) => setRewrites((s) => s.map((x, j) => (j === i ? { ...x, replacement: e.target.value } : x)))}
+                  className="w-44 font-mono text-xs"
+                />
+                <Select
+                  value={rw.backend}
+                  onChange={(e) => setRewrites((s) => s.map((x, j) => (j === i ? { ...x, backend: e.target.value } : x)))}
+                  className="min-w-40 flex-1 font-mono text-xs"
+                  title="限定仅对该后端生效（可选）"
+                >
+                  <option value="">全部后端</option>
+                  {rows.map((r) => (
+                    <option key={r.url} value={r.url}>
+                      仅 {r.url}
+                    </option>
+                  ))}
+                </Select>
+                <Button size="icon" variant="ghost" title="删除" onClick={() => setRewrites(rewrites.filter((_, j) => j !== i))}>
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
+              </div>
+            ))}
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setRewrites([...rewrites, { prefix: '', replacement: '', backend: '' }])}>
+                <Plus className="h-3.5 w-3.5" /> 添加重写
+              </Button>
+              {rewrites.length === 0 && <span className="text-xs text-muted-foreground">无规则：路径原样转发</span>}
             </div>
           </div>
 
