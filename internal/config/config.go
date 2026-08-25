@@ -37,9 +37,10 @@ type DatabaseConfig struct {
 }
 
 type ProxyConfig struct {
-	TimeoutSeconds      int  `yaml:"timeout_seconds"`
-	MaxBodyBytes        int  `yaml:"max_body_bytes"`        // 请求体大小上限（拒绝超限）
-	TrustForwardedHeaders bool `yaml:"trust_forwarded_headers"` // 是否信任入站 X-Forwarded-For（多级代理时开启，默认 false 防伪造）
+	TimeoutSeconds        int  `yaml:"timeout_seconds"`
+	MaxBodyBytes          int  `yaml:"max_body_bytes"`           // 请求体大小上限（拒绝超限）；超过此值走流式透传
+	MaxUploadBytes        int  `yaml:"max_upload_bytes"`         // 流式透传上限（文件上传/大请求体，0=不限制）；超出返回 413
+	TrustForwardedHeaders bool `yaml:"trust_forwarded_headers"`  // 是否信任入站 X-Forwarded-For（多级代理时开启，默认 false 防伪造）
 }
 
 type AuthConfig struct {
@@ -50,11 +51,12 @@ type AuthConfig struct {
 }
 
 type LogConfig struct {
-	Level         string  `yaml:"level"`
-	SampleRate    float64 `yaml:"sample_rate"`
-	RetentionDays int     `yaml:"retention_days"`
-	MaskSensitive bool    `yaml:"mask_sensitive"`
-	BodyMaxBytes  int     `yaml:"body_max_bytes"` // 日志记录的请求/响应体截断上限
+	Level          string  `yaml:"level"`
+	SampleRate     float64 `yaml:"sample_rate"`
+	RetentionDays  int     `yaml:"retention_days"`
+	MaskSensitive  bool    `yaml:"mask_sensitive"`
+	BodyMaxBytes   int     `yaml:"body_max_bytes"`    // 日志记录的请求/响应体截断上限
+	QueueCapacity  int     `yaml:"queue_capacity"`    // 异步日志队列容量上限（满时丢弃最旧；0=不限制）
 }
 
 // RateLimitConfig 限流配置：按 Token 维度限制每分钟请求数
@@ -196,7 +198,8 @@ func defaultConfig() *Config {
 		Database: DatabaseConfig{Path: "./data/sentinel.db"},
 		Proxy: ProxyConfig{
 			TimeoutSeconds:        30,
-			MaxBodyBytes:          10 * 1024 * 1024, // 10MB
+			MaxBodyBytes:          10 * 1024 * 1024,  // 10MB：超此值走流式透传（不读进内存）
+			MaxUploadBytes:        1 * 1024 * 1024 * 1024, // 1GB：流式透传上限（文件上传），0=不限制
 			TrustForwardedHeaders: false,
 		},
 		Auth: AuthConfig{
@@ -208,6 +211,7 @@ func defaultConfig() *Config {
 			RetentionDays: 30,
 			MaskSensitive: true,
 			BodyMaxBytes:  64 * 1024, // 64KB：日志缓冲独立上限，防止大响应撑爆内存
+			QueueCapacity: 10000,     // 异步队列上限（满时丢弃最旧），0=不限制
 		},
 	}
 }
@@ -240,6 +244,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("PROXY_MAX_BODY_BYTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Proxy.MaxBodyBytes = n
+		}
+	}
+	if v := os.Getenv("PROXY_MAX_UPLOAD_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Proxy.MaxUploadBytes = n
 		}
 	}
 	if v := os.Getenv("PROXY_TRUST_FORWARDED_HEADERS"); v != "" {
@@ -286,6 +295,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("LOG_BODY_MAX_BYTES"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Log.BodyMaxBytes = n
+		}
+	}
+	if v := os.Getenv("LOG_QUEUE_CAPACITY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Log.QueueCapacity = n
 		}
 	}
 	if v := os.Getenv("RATE_LIMIT_DEFAULT_RPM"); v != "" {
@@ -362,6 +376,12 @@ func (c *Config) validate() ([]string, error) {
 	}
 	if c.Proxy.MaxBodyBytes <= 0 {
 		c.Proxy.MaxBodyBytes = 10 * 1024 * 1024
+	}
+	if c.Proxy.MaxUploadBytes < 0 {
+		c.Proxy.MaxUploadBytes = 0 // 负数归零（0 = 不限制）
+	}
+	if c.Log.QueueCapacity < 0 {
+		c.Log.QueueCapacity = 0 // 负数归零（0 = 不限制）
 	}
 	return warnings, nil
 }

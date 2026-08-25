@@ -26,27 +26,29 @@ const pathPrefix = "/proxy"
 
 // Handler 反向代理核心处理器
 type Handler struct {
-	balancer     Balancer
-	logger       *logger.Writer
-	timeout      time.Duration
-	maxBodyBytes int64     // 请求体大小上限（拒绝超限请求）
-	logBodyMax   int64     // 日志记录的请求/响应体截断上限（与 maxBodyBytes 独立，防止日志缓冲撑爆内存）
-	trustXFF     bool      // 是否信任入站 X-Forwarded-For/X-Real-IP（多级代理时开启）
-	transport    http.RoundTripper
+	balancer       Balancer
+	logger         *logger.Writer
+	timeout        time.Duration
+	maxBodyBytes   int64 // 请求体大小上限：超过此值走流式透传（不读进内存）
+	maxUploadBytes int64 // 流式透传上限（文件上传/大请求体，0=不限制）；超出返回 413
+	logBodyMax     int64 // 日志记录的请求/响应体截断上限（与 maxBodyBytes 独立，防止日志缓冲撑爆内存）
+	trustXFF       bool  // 是否信任入站 X-Forwarded-For/X-Real-IP（多级代理时开启）
+	transport      http.RoundTripper
 
 	rules atomic.Pointer[RuleMatcher] // 定向分流规则（灰度发布），原子替换热生效
 	rewrites atomic.Pointer[Rewriter] // 路径重写规则，原子替换热生效
 }
 
 // NewHandler 创建反向代理处理器
-func NewHandler(b Balancer, lw *logger.Writer, timeoutSec int, maxBodyBytes, logBodyMax int64, trustXFF bool) *Handler {
+func NewHandler(b Balancer, lw *logger.Writer, timeoutSec int, maxBodyBytes, maxUploadBytes, logBodyMax int64, trustXFF bool) *Handler {
 	h := &Handler{
-		balancer:     b,
-		logger:       lw,
-		timeout:      time.Duration(timeoutSec) * time.Second,
-		maxBodyBytes: maxBodyBytes,
-		logBodyMax:   logBodyMax,
-		trustXFF:     trustXFF,
+		balancer:       b,
+		logger:         lw,
+		timeout:        time.Duration(timeoutSec) * time.Second,
+		maxBodyBytes:   maxBodyBytes,
+		maxUploadBytes: maxUploadBytes,
+		logBodyMax:     logBodyMax,
+		trustXFF:       trustXFF,
 		transport: &http.Transport{
 			MaxIdleConns:          100,
 			MaxIdleConnsPerHost:   20,
@@ -111,22 +113,47 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 读取并限制请求体
+	// 请求体处理：小请求读进内存（可记日志 body），大请求流式透传（不占内存）
+	// - ContentLength <= maxBodyBytes：读进内存，日志可记 body
+	// - ContentLength > maxBodyBytes 或 chunked（未知大小）：流式透传，不读进内存
+	//   - 已知大小超 maxUploadBytes：直接 413（body 一个字节都没读）
+	//   - 未知大小（chunked）：用 MaxBytesReader 边读边限，超限中断
 	var reqBody []byte
 	if r.Body != nil && r.ContentLength != 0 {
-		limited := io.LimitReader(r.Body, h.maxBodyBytes+1)
-		b, err := io.ReadAll(limited)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "read request body failed")
-			return
+		cl := r.ContentLength
+		if cl > h.maxBodyBytes || cl < 0 {
+			// 大请求体或 chunked：流式透传，不读进内存
+			if cl > 0 && h.maxUploadBytes > 0 && cl > h.maxUploadBytes {
+				// 已知大小超上传限制：直接拒绝（body 一个字节都没读）
+				writeJSONError(w, http.StatusRequestEntityTooLarge, "upload body too large")
+				return
+			}
+			// chunked 或大请求：用 MaxBytesReader 包装防超限（maxUploadBytes=0 表示不限制）
+			if h.maxUploadBytes > 0 {
+				r.Body = http.MaxBytesReader(w, r.Body, h.maxUploadBytes)
+			}
+			// 日志记元信息标记（body 未记录，排障时可见大小）
+			if cl > 0 {
+				reqBody = []byte("[streamed " + strconv.FormatInt(cl, 10) + " bytes]")
+			} else {
+				reqBody = []byte("[streamed chunked]")
+			}
+		} else {
+			// 小请求体：读进内存用于日志记录
+			limited := io.LimitReader(r.Body, h.maxBodyBytes+1)
+			b, err := io.ReadAll(limited)
+			if err != nil {
+				writeJSONError(w, http.StatusBadRequest, "read request body failed")
+				return
+			}
+			if int64(len(b)) > h.maxBodyBytes {
+				writeJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
+			reqBody = b
+			r.Body = io.NopCloser(bytes.NewReader(reqBody))
+			r.ContentLength = int64(len(reqBody))
 		}
-		if int64(len(b)) > h.maxBodyBytes {
-			writeJSONError(w, http.StatusRequestEntityTooLarge, "request body too large")
-			return
-		}
-		reqBody = b
-		r.Body = io.NopCloser(bytes.NewReader(reqBody))
-		r.ContentLength = int64(len(reqBody))
 	}
 
 	target, err := url.Parse(backend)

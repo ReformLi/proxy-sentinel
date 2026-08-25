@@ -22,11 +22,13 @@ type Writer struct {
 	db            *storage.DB
 	sampleRate    float64
 	maskSensitive bool
+	queueCapacity int // 异步日志队列容量上限（满时丢弃最旧；0=不限制）
 
 	mu     sync.Mutex
 	buffer []*storage.LogRecord
 
-	seq int64 // 本地序号，用于 SSE 推送（数据库自增 ID 在批量落库前尚未生成）
+	droppedCount int64 // 累计丢弃数（mu 锁内操作，flush 时清零并告警）
+	seq          int64 // 本地序号，用于 SSE 推送（数据库自增 ID 在批量落库前尚未生成）
 
 	flushCh chan struct{}
 
@@ -38,11 +40,12 @@ type Writer struct {
 }
 
 // NewWriter 创建日志写入器
-func NewWriter(db *storage.DB, sampleRate float64, maskSensitive bool) *Writer {
+func NewWriter(db *storage.DB, sampleRate float64, maskSensitive bool, queueCapacity int) *Writer {
 	w := &Writer{
 		db:            db,
 		sampleRate:    sampleRate,
 		maskSensitive: maskSensitive,
+		queueCapacity: queueCapacity,
 		flushCh:       make(chan struct{}, 1),
 		subscribers:   make(map[chan *storage.LogRecord]struct{}),
 		done:          make(chan struct{}),
@@ -67,6 +70,16 @@ func (w *Writer) Write(rec *storage.LogRecord) {
 	}
 
 	w.mu.Lock()
+	// 队列容量上限保护：满时丢弃最旧一批（flushBatch 条），保留较新日志；0=不限制
+	if w.queueCapacity > 0 && len(w.buffer) >= w.queueCapacity {
+		drop := flushBatch
+		if drop > len(w.buffer) {
+			drop = len(w.buffer)
+		}
+		// 重新分配切片，避免底层数组前部引用泄漏导致内存不释放
+		w.buffer = append([]*storage.LogRecord(nil), w.buffer[drop:]...)
+		w.droppedCount += int64(drop)
+	}
 	w.buffer = append(w.buffer, rec)
 	needFlush := len(w.buffer) >= flushBatch
 	w.mu.Unlock()
@@ -87,13 +100,22 @@ func (w *Writer) Write(rec *storage.LogRecord) {
 // flush 将缓冲区批量写入数据库（单事务提交，避免逐条 fsync）
 func (w *Writer) flush() {
 	w.mu.Lock()
+	dropped := w.droppedCount
+	w.droppedCount = 0
 	if len(w.buffer) == 0 {
 		w.mu.Unlock()
+		if dropped > 0 {
+			log.Printf("日志队列降级：丢弃 %d 条最旧日志（队列上限 %d，0=不限制）", dropped, w.queueCapacity)
+		}
 		return
 	}
 	batch := w.buffer
 	w.buffer = nil
 	w.mu.Unlock()
+
+	if dropped > 0 {
+		log.Printf("日志队列降级：丢弃 %d 条最旧日志（队列上限 %d，0=不限制）", dropped, w.queueCapacity)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

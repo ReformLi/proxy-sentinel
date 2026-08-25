@@ -28,11 +28,13 @@ type logSettings struct {
 	RetentionDays int     `json:"retention_days"`
 	MaskSensitive bool    `json:"mask_sensitive"`
 	BodyMaxBytes  int     `json:"body_max_bytes"`
+	QueueCapacity int     `json:"queue_capacity"` // 异步队列上限（满时丢弃最旧；0=不限制），改后重启生效
 }
 
 type proxySettings struct {
 	TimeoutSeconds        int  `json:"timeout_seconds"`
-	MaxBodyBytes          int  `json:"max_body_bytes"`
+	MaxBodyBytes          int  `json:"max_body_bytes"`           // 超此值走流式透传（不读进内存）
+	MaxUploadBytes        int  `json:"max_upload_bytes"`          // 流式透传上限（文件上传，0=不限制），改后重启生效
 	TrustForwardedHeaders bool `json:"trust_forwarded_headers"`
 }
 
@@ -63,16 +65,18 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		Strategy: s.balancer.Strategy(),
 		Rules:    rules,
 		Rewrites: rewrites,
-		Log:      logSettings{
+		Log: logSettings{
 			Level:         s.cfg.Log.Level,
 			SampleRate:    s.cfg.Log.SampleRate,
 			RetentionDays: s.cfg.Log.RetentionDays,
 			MaskSensitive: s.cfg.Log.MaskSensitive,
 			BodyMaxBytes:  s.cfg.Log.BodyMaxBytes,
+			QueueCapacity: s.cfg.Log.QueueCapacity,
 		},
 		Proxy: proxySettings{
 			TimeoutSeconds:        s.cfg.Proxy.TimeoutSeconds,
 			MaxBodyBytes:          s.cfg.Proxy.MaxBodyBytes,
+			MaxUploadBytes:        s.cfg.Proxy.MaxUploadBytes,
 			TrustForwardedHeaders: s.cfg.Proxy.TrustForwardedHeaders,
 		},
 		RateLimit: rateLimitSettings{

@@ -14,7 +14,8 @@
 - HTTP/HTTPS 全路径转发，保留原始请求方法与 Headers
 - 负载均衡：轮询（round_robin）/ 随机（random）/ 加权随机（weighted，按权重比例分流），支持运行时切换并持久化
 - 健康检查：30s 周期探测（每后端可配独立探测路径），自动剔除故障节点、恢复后自动上线
-- 超时控制（默认 30s）、请求体大小限制（默认 10MB）、流式响应（大文件不缓存）
+- 超时控制（默认 30s）、请求体大小双层限制（`max_body_bytes` 10MB + `max_upload_bytes` 1GB）、流式响应（大文件不缓存）
+- **大请求体流式透传**：请求体 ≤ 10MB 读进内存（可记日志 body）；> 10MB 走流式透传（不占内存，日志只记元信息与大小标记），超 `max_upload_bytes` 返回 413；chunked（未知大小）用 `http.MaxBytesReader` 边读边限
 - 可选信任 `X-Forwarded-For`（仅前置可信反代时开启）
 
 ### 请求链路追踪（X-Request-ID）
@@ -46,6 +47,7 @@
 ### 日志系统
 - 完整记录：方法、路径、Headers、请求/响应体、状态码、耗时、客户端 IP/UA/Referer、命中的后端、链路 ID
 - 异步批量落盘（满 100 条或每 5s 单事务提交），不阻塞请求响应
+- **队列容量上限**（`queue_capacity` 默认 10000，0=不限制）：DB 写入慢导致队列堆积时丢弃最旧日志并输出降级告警，防止 OOM
 - 敏感字段自动脱敏（`Authorization`、`Cookie`、`Password` 等）
 - 采样率可配置（高并发下降采样）、保留天数自动清理（默认 30 天）
 
@@ -145,7 +147,8 @@ database:
 
 proxy:
   timeout_seconds: 30          # 连接/读取超时
-  max_body_bytes: 10485760     # 最大请求体 10MB
+  max_body_bytes: 10485760     # ≤10MB 读内存记日志；>10MB 流式透传（不读进内存）
+  max_upload_bytes: 1073741824 # 流式透传上限 1GB（文件上传）；超限 413；0=不限制
   trust_forwarded_headers: false # 仅前置可信反代时开启
 
 auth:
@@ -161,6 +164,7 @@ log:
   retention_days: 30           # 日志保留天数（自动清理）
   mask_sensitive: true         # 敏感字段脱敏
   body_max_bytes: 65536        # 日志记录的请求/响应体截断上限
+  queue_capacity: 10000       # 异步队列上限（满时丢弃最旧+告警）；0=不限制
 
 # SECURE_COOKIE=true           # 生产 HTTPS 环境设置（环境变量）
 ```

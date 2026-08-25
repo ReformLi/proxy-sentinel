@@ -113,11 +113,11 @@ func main() {
 	health.Start()
 	defer health.Stop()
 
-	logWriter := logger.NewWriter(db, cfg.Log.SampleRate, cfg.Log.MaskSensitive)
+	logWriter := logger.NewWriter(db, cfg.Log.SampleRate, cfg.Log.MaskSensitive, cfg.Log.QueueCapacity)
 	defer logWriter.Close()
 
 	proxyHandler := proxy.NewHandler(balancer, logWriter, cfg.Proxy.TimeoutSeconds,
-		int64(cfg.Proxy.MaxBodyBytes), int64(cfg.Log.BodyMaxBytes), cfg.Proxy.TrustForwardedHeaders)
+		int64(cfg.Proxy.MaxBodyBytes), int64(cfg.Proxy.MaxUploadBytes), int64(cfg.Log.BodyMaxBytes), cfg.Proxy.TrustForwardedHeaders)
 	proxyHandler.SetRules(rules)
 	proxyHandler.SetRewrites(rewrites)
 
