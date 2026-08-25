@@ -25,15 +25,14 @@ export default function Flow() {
 
   const option = useMemo<echarts.EChartsOption>(() => {
     const total = nodes.reduce((s, n) => s + n.count, 0)
-    const maxCount = Math.max(1, ...nodes.map((n) => n.count))
     const durations = nodes.map((n) => n.avg_duration)
     const minD = Math.min(0, ...durations)
     const maxD = Math.max(1, ...durations)
 
-    // graph 节点：客户端 / 网关 / 各后端
+    // graph 节点：客户端 / 网关 / 各后端（后端按当前列表顺序编号：后端1、后端2…）
     const graphNodes = [
-      { id: 'clients', name: '客户端', x: 60, y: 300, symbolSize: 64, itemStyle: { color: '#6366f1' }, label: { show: true, formatter: '客户端\n{c}' } },
-      { id: 'gateway', name: 'Sentinel', x: 340, y: 300, symbolSize: 76, itemStyle: { color: '#0ea5e9' }, label: { show: true, formatter: '网关' } },
+      { id: 'clients', name: '客户端', x: 60, y: 300, symbolSize: 64, itemStyle: { color: '#6366f1' } },
+      { id: 'gateway', name: '代理网关\nProxy Sentinel', x: 340, y: 300, symbolSize: 84, itemStyle: { color: '#0ea5e9' } },
       ...nodes.map((n, i) => {
         const y = nodes.length === 1 ? 300 : 80 + (i * 440) / (nodes.length - 1)
         return {
@@ -43,26 +42,48 @@ export default function Flow() {
           y,
           symbolSize: 48,
           itemStyle: { color: n.error_count > 0 ? '#ef4444' : '#22c55e' },
-          label: { show: true, formatter: hostOf(n.backend_url), position: 'right' as const },
+          // 方块内显示编号，悬停 tooltip 显示完整 URL
+          label: { show: true, formatter: `后端${i + 1}`, position: 'inside' as const, color: '#fff' },
+          tooltip: { formatter: `后端${i + 1}：${n.backend_url}` },
         }
       }),
     ]
 
-    // graph 边：客户端→网关（总量）、网关→各后端
-    const edge = (source: string, target: string, count: number, duration: number) => ({
+    // graph 边：统一线宽 + 统一箭头；边 label 显示请求量与占比
+    const edge = (
+      source: string,
+      target: string,
+      count: number,
+      duration: number,
+      share?: number,
+    ) => ({
       source,
       target,
       lineStyle: {
-        width: Math.max(1.5, (count / maxCount) * 10),
+        width: 2.5,
         color: durationColor(duration, minD, maxD),
         curveness: 0,
       },
       value: count,
+      label: {
+        show: true,
+        position: 'middle' as const,
+        rotate: 0,
+        fontSize: 11,
+        formatter: share !== undefined ? `${fmtNum(count)} (${share.toFixed(1)}%)` : fmtNum(count),
+        backgroundColor: 'rgba(255,255,255,0.9)',
+        padding: [2, 5, 2, 5] as [number, number, number, number],
+        borderRadius: 4,
+      },
     })
     const gatewayAvg = nodes.length ? nodes.reduce((s, n) => s + n.avg_duration * n.count, 0) / Math.max(1, total) : 0
     const graphEdges = [
+      // 客户端 → 网关：只显示总量，不计算占比（恒 100%）
       edge('clients', 'gateway', total, gatewayAvg),
-      ...nodes.map((n, i) => edge('gateway', `be-${i}`, n.count, n.avg_duration)),
+      // 网关 → 各后端：显示请求量 + 占总量比例
+      ...nodes.map((n, i) =>
+        edge('gateway', `be-${i}`, n.count, n.avg_duration, total > 0 ? (n.count / total) * 100 : 0),
+      ),
     ]
 
     return {
@@ -70,13 +91,16 @@ export default function Flow() {
         formatter: (params) => {
           const p = Array.isArray(params) ? params[0] : params
           if (p?.dataType === 'edge') return `请求量：${fmtNum(Number(p.value ?? 0))}`
+          // 节点：后端节点带专属 tooltip（编号+完整 URL），客户端/网关显示名称
+          const data = p?.data as { tooltip?: { formatter?: string } } | undefined
+          if (data?.tooltip?.formatter) return data.tooltip.formatter
           return p?.name ?? ''
         },
       },
       legend: {
         bottom: 10,
         data: ['快 (<P50)', '中', '慢 (>P90)'],
-        formatter: () => '边颜色：绿=快 红=慢 · 边宽度：请求量',
+        formatter: () => '节点：绿=无错误 红=有5xx · 边颜色：绿=快 红=慢 · 边标签：请求量（占比）',
         selectedMode: false,
       },
       series: [
@@ -86,13 +110,13 @@ export default function Flow() {
           symbol: 'roundRect',
           symbolSize: 50,
           edgeSymbol: ['none', 'arrow'],
-          edgeSymbolSize: 8,
+          edgeSymbolSize: 10,
           roam: true,
-          label: { fontSize: 12, color: '#fff' },
-          emphasis: { focus: 'adjacency', lineStyle: { width: 12 } },
+          label: { show: true, fontSize: 12, color: '#fff' },
+          emphasis: { focus: 'adjacency', lineStyle: { width: 5 } },
           data: graphNodes,
           links: graphEdges,
-          lineStyle: { opacity: 0.85 },
+          lineStyle: { opacity: 0.9 },
         },
       ],
     }
@@ -104,7 +128,7 @@ export default function Flow() {
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <div>
             <CardTitle>数据流向拓扑</CardTitle>
-            <CardDescription>边宽表示请求量，颜色表示平均耗时（绿快红慢）；悬停查看数值，点击后端节点跳转对应日志</CardDescription>
+            <CardDescription>边颜色表示平均耗时（绿快红慢），边标签显示请求量及占比；悬停查看数值，点击后端节点跳转对应日志</CardDescription>
           </div>
           <div className="flex gap-2">
             {windows.map((w) => (
@@ -180,14 +204,6 @@ export default function Flow() {
       </Card>
     </div>
   )
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host
-  } catch {
-    return url
-  }
 }
 
 function durationColor(d: number, minD: number, maxD: number): string {
