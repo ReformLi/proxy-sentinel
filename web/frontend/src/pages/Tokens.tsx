@@ -140,6 +140,22 @@ export default function Tokens() {
               const edit = editing[t.id]
               return (
                 <div key={t.id} className="flex flex-wrap items-center gap-2 rounded-md border p-2.5">
+                  <span
+                    className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                      t.expires_at && isExpired(t.expires_at)
+                        ? 'bg-red-500'
+                        : t.expires_at && isExpiringSoon(t.expires_at)
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                    }`}
+                    title={
+                      t.expires_at && isExpired(t.expires_at)
+                        ? '已作废（已过期）'
+                        : t.expires_at && isExpiringSoon(t.expires_at)
+                          ? '即将过期'
+                          : '正常可用'
+                    }
+                  />
                   {edit ? (
                     <>
                       <Input
@@ -221,7 +237,10 @@ export default function Tokens() {
               <Input
                 placeholder="Token 名称（如：订单服务）"
                 value={newName}
-                onChange={(e) => setNewName(e.target.value)}
+                onChange={(e) => {
+                  setNewName(e.target.value)
+                  if (msg) setMsg('')
+                }}
                 onKeyDown={(e) => e.key === 'Enter' && create()}
                 className="w-56"
               />
@@ -277,7 +296,7 @@ export default function Tokens() {
               )}
             </div>
           </div>
-          {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
+          {msg && <p className="text-sm text-destructive">{msg}</p>}
         </CardContent>
       </Card>
 

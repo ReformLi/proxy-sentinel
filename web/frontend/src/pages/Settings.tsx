@@ -16,6 +16,7 @@ export default function Settings() {
   const [newUrl, setNewUrl] = useState('')
   const [editing, setEditing] = useState<Record<number, string>>({})
   const [msg, setMsg] = useState('')
+  const [msgType, setMsgType] = useState<'error' | 'success'>('error')
   const [saving, setSaving] = useState(false)
   // 已保存基线（结构化，支持"回退"整体恢复）
   const [baseline, setBaseline] = useState<{
@@ -56,6 +57,7 @@ export default function Settings() {
     setRewrites(b.rewrites)
     setEditing({})
     setMsg('')
+    setMsgType('error')
   }
 
   const load = useCallback((apply = false) => {
@@ -91,10 +93,12 @@ export default function Settings() {
     const u = newUrl.trim()
     if (!u) return
     if (!/^https?:\/\/.+/.test(u)) {
+      setMsgType('error')
       setMsg('地址需以 http:// 或 https:// 开头')
       return
     }
     if (rows.some((r) => r.url === u)) {
+      setMsgType('error')
       setMsg('该后端已存在')
       return
     }
@@ -113,9 +117,11 @@ export default function Settings() {
       setRows(committedRows)
       setEditing({})
       setBaseline({ rows: committedRows, strategy, rules, rewrites })
+      setMsgType('success')
       setMsg('已保存：立即生效，重启后保留')
       load(true)
     } catch (e) {
+      setMsgType('error')
       setMsg(e instanceof Error ? e.message : '保存失败')
     } finally {
       setSaving(false)
@@ -206,7 +212,10 @@ export default function Settings() {
             <Input
               placeholder="https://backend.example.com"
               value={newUrl}
-              onChange={(e) => setNewUrl(e.target.value)}
+              onChange={(e) => {
+                setNewUrl(e.target.value)
+                if (msg) setMsg('')
+              }}
               onKeyDown={(e) => e.key === 'Enter' && addUrl()}
               className="font-mono text-xs"
             />
@@ -353,7 +362,11 @@ export default function Settings() {
               <Save className="h-4 w-4" /> {saving ? '保存中…' : '保存'}
             </Button>
           </div>
-          {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
+          {msg && (
+            <p className={`text-sm ${msgType === 'error' ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400'}`}>
+              {msg}
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -410,6 +423,7 @@ function IPACLCard() {
   const [blacklist, setBlacklist] = useState<IPACLEntry[]>([])
   const [whitelist, setWhitelist] = useState<IPACLEntry[]>([])
   const [msg, setMsg] = useState('')
+  const [msgType, setMsgType] = useState<'error' | 'success'>('error')
   const [saving, setSaving] = useState(false)
   // 已保存基线（结构化，支持"回退"整体恢复）
   const [snapshot, setSnapshot] = useState<{ mode: IPACLMode; def: IPACLDefault; bl: IPACLEntry[]; wl: IPACLEntry[] } | null>(null)
@@ -444,6 +458,7 @@ function IPACLCard() {
     setBlacklist(snapshot.bl)
     setWhitelist(snapshot.wl)
     setMsg('')
+    setMsgType('error')
   }
 
   const save = async () => {
@@ -452,8 +467,10 @@ function IPACLCard() {
     try {
       await api.put('/api/ip-acl', { mode, default: def, blacklist, whitelist })
       setSnapshot({ mode, def, bl: blacklist, wl: whitelist })
+      setMsgType('success')
       setMsg('已保存：立即生效，重启后保留')
     } catch (e) {
+      setMsgType('error')
       setMsg(e instanceof Error ? e.message : '保存失败')
     } finally {
       setSaving(false)
@@ -540,7 +557,11 @@ function IPACLCard() {
             默认动作为「拒绝」且白名单为空 = 拒绝所有请求，请先添加白名单条目
           </p>
         )}
-        {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
+        {msg && (
+          <p className={`text-sm ${msgType === 'error' ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400'}`}>
+            {msg}
+          </p>
+        )}
       </CardContent>
     </Card>
   )
@@ -621,7 +642,10 @@ function ACLGroup({
           placeholder="IP / CIDR"
           value={newValue}
           disabled={disabled}
-          onChange={(e) => setNewValue(e.target.value)}
+          onChange={(e) => {
+            setNewValue(e.target.value)
+            onError('')
+          }}
           onKeyDown={(e) => e.key === 'Enter' && add()}
           className="w-44 font-mono text-xs"
         />
@@ -650,6 +674,7 @@ function AlertCard() {
     silence_minutes: 10,
   })
   const [msg, setMsg] = useState('')
+  const [msgType, setMsgType] = useState<'error' | 'success'>('error')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   // 已保存基线（结构化，支持"回退"整体恢复）
@@ -683,6 +708,7 @@ function AlertCard() {
     if (!snapshot) return
     setRules(snapshot)
     setMsg('')
+    setMsgType('error')
   }
 
   const save = async () => {
@@ -691,8 +717,10 @@ function AlertCard() {
     try {
       await api.put('/api/alert/config', rules)
       setSnapshot(rules)
+      setMsgType('success')
       setMsg('已保存：立即生效，重启后保留')
     } catch (e) {
+      setMsgType('error')
       setMsg(e instanceof Error ? e.message : '保存失败')
     } finally {
       setSaving(false)
@@ -704,8 +732,10 @@ function AlertCard() {
     setMsg('')
     try {
       const r = await api.post<{ message: string }>('/api/alert/test')
+      setMsgType('success')
       setMsg(r.message)
     } catch (e) {
+      setMsgType('error')
       setMsg(e instanceof Error ? e.message : '发送失败')
     } finally {
       setTesting(false)
@@ -795,7 +825,11 @@ function AlertCard() {
             <Save className="h-4 w-4" /> {saving ? '保存中…' : '保存'}
           </Button>
         </div>
-        {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
+        {msg && (
+          <p className={`text-sm ${msgType === 'error' ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400'}`}>
+            {msg}
+          </p>
+        )}
       </CardContent>
     </Card>
   )
