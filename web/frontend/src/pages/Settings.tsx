@@ -123,7 +123,7 @@ export default function Settings() {
   }
 
   return (
-    <div className="max-w-4xl space-y-4">
+    <div className="space-y-4">
       {/* 后端节点管理 */}
       <Card>
         <CardHeader>

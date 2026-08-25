@@ -122,7 +122,7 @@ export default function Tokens() {
   const tokens = data?.tokens ?? []
 
   return (
-    <div className="max-w-4xl space-y-4">
+    <div className="space-y-4">
       {/* 列表 */}
       <Card>
         <CardHeader>
@@ -231,7 +231,7 @@ export default function Tokens() {
                 onChange={(e) => setNewRpm(e.target.value)}
                 type="number"
                 min={0}
-                className="w-48"
+                className="w-60"
               />
               <Button onClick={create} disabled={busy}>
                 <Plus className="h-4 w-4" /> 生成 Token
