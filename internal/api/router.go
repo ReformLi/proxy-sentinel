@@ -107,10 +107,10 @@ func (s *Server) Router() http.Handler {
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 
 	// 前端静态资源（Vite 构建产物：/assets/*、favicon 等）
-	mux.Handle("GET /assets/", http.StripPrefix("/", web.Static()))
-	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		http.StripPrefix("/", web.Static()).ServeHTTP(w, r)
-	})
+	static := http.StripPrefix("/", web.Static())
+	mux.Handle("GET /assets/", static)
+	mux.Handle("GET /favicon.ico", static)
+	mux.Handle("GET /favicon.svg", static)
 
 	// 登录页（SPA 无认证路由）
 	mux.HandleFunc("GET /login", spaIndex)

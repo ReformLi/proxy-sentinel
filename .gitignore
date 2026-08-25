@@ -7,6 +7,8 @@
 /proxy-sentinel
 /proxy-sentinel.exe
 /proxy-sentinel-*
+/sentinel
+/sentinel.exe
 
 # 依赖管理工具产生的文件
 # Go Modules 正常情况下只需提交 go.mod 和 go.sum，vendor 目录一般不提交
@@ -205,6 +207,11 @@ web/frontend/node_modules/
 !web/frontend/package.json
 !web/frontend/package-lock.json
 !web/frontend/tsconfig.json
+
+# 构建产物（npm run build 生成 → web/dist；go build 时 embed 进二进制）
+# 不入库：clone 后需先 cd web/frontend && npm install && npm run build 才能跑 go build
+web/dist/*
+!web/dist/.gitkeep
 
 # 临时响应抓包文件（调试产物）
 resp*.txt
