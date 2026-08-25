@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS proxy_tokens (
   name TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   last_used_at DATETIME,
-  rate_limit_rpm INTEGER DEFAULT 0
+  rate_limit_rpm INTEGER DEFAULT 0,
+  expires_at DATETIME
 );
 CREATE INDEX IF NOT EXISTS idx_token ON proxy_tokens(token);
 
@@ -126,6 +127,9 @@ func (db *DB) migrate() error {
 	}
 	// 增量列迁移：CREATE TABLE IF NOT EXISTS 不会给已存在的表补列
 	if err := db.addColumnIfMissing("proxy_tokens", "rate_limit_rpm", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("proxy_tokens", "expires_at", "DATETIME"); err != nil {
 		return err
 	}
 	if err := db.addColumnIfMissing("proxy_logs", "request_id", "TEXT"); err != nil {

@@ -174,6 +174,7 @@ export interface TokenInfo {
   rate_limit_rpm: number
   created_at: string
   last_used_at: string | null
+  expires_at: string | null
 }
 
 export interface TokenListData {
@@ -186,6 +187,7 @@ export interface CreatedToken {
   token: string
   name: string
   rate_limit_rpm: number
+  expires_at?: string
 }
 
 export interface AlertRules {

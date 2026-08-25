@@ -42,7 +42,7 @@ func (m *ProxyAuthMiddleware) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		if !valid {
-			http.Error(w, `{"error":"invalid or revoked token"}`, http.StatusUnauthorized)
+			http.Error(w, `{"error":"invalid, revoked or expired token"}`, http.StatusUnauthorized)
 			return
 		}
 

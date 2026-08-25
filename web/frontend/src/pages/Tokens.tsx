@@ -18,6 +18,8 @@ export default function Tokens() {
   const [newRpm, setNewRpm] = useState('')
   const [customToken, setCustomToken] = useState('')
   const [showCustom, setShowCustom] = useState(false)
+  const [expiryPreset, setExpiryPreset] = useState<string>('')  // '' / '7' / '30' / '90' / 'custom'
+  const [expiryCustom, setExpiryCustom] = useState<string>('')  // 自定义天数（仅 preset=custom 时生效）
 
   // 新建成功后的一次性明文展示
   const [created, setCreated] = useState<CreatedToken | null>(null)
@@ -49,12 +51,17 @@ export default function Tokens() {
     try {
       const body: Record<string, unknown> = { name, rate_limit_rpm: Number.isNaN(rpm) ? 0 : rpm }
       if (showCustom && customToken.trim()) body.token = customToken.trim()
+      const daysStr = expiryPreset === 'custom' ? expiryCustom : expiryPreset
+      const days = parseInt(daysStr, 10)
+      if (!Number.isNaN(days) && days > 0) body.expires_in_days = days
       const c = await api.post<CreatedToken>('/api/tokens', body)
       setCreated(c)
       setNewName('')
       setNewRpm('')
       setCustomToken('')
       setShowCustom(false)
+      setExpiryPreset('')
+      setExpiryCustom('')
       load()
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '创建失败')
@@ -171,6 +178,11 @@ export default function Tokens() {
                     <>
                       <span className="min-w-28 font-medium">{t.name}</span>
                       <Badge variant="secondary" className="font-mono">ID {t.id}</Badge>
+                      {t.expires_at && (
+                        <Badge variant={isExpired(t.expires_at) ? 'destructive' : isExpiringSoon(t.expires_at) ? 'secondary' : 'outline'} className="text-xs">
+                          {isExpired(t.expires_at) ? '已过期' : `过期 ${fmtTime(t.expires_at)}`}
+                        </Badge>
+                      )}
                       <span className="text-xs text-muted-foreground">
                         {t.rate_limit_rpm > 0 ? `独立限流 ${t.rate_limit_rpm} 次/分` : `默认限流${defaultRpm > 0 ? ` ${defaultRpm} 次/分` : '（未启用）'}`}
                       </span>
@@ -239,6 +251,31 @@ export default function Tokens() {
                 className="font-mono text-xs"
               />
             )}
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>过期时间：</span>
+              <select
+                value={expiryPreset}
+                onChange={(e) => setExpiryPreset(e.target.value)}
+                className="rounded-md border bg-card px-2 py-1 text-xs"
+              >
+                <option value="">永不过期</option>
+                <option value="7">7 天</option>
+                <option value="30">30 天</option>
+                <option value="90">90 天</option>
+                <option value="custom">自定义天数…</option>
+              </select>
+              {expiryPreset === 'custom' && (
+                <Input
+                  type="number"
+                  min={1}
+                  placeholder="天数"
+                  value={expiryCustom}
+                  onChange={(e) => setExpiryCustom(e.target.value)}
+                  className="w-20 text-xs"
+                  autoFocus
+                />
+              )}
+            </div>
           </div>
           {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
         </CardContent>
@@ -282,4 +319,13 @@ export default function Tokens() {
 
 function fmtTime(s: string): string {
   return new Date(s).toLocaleString('zh-CN', { hour12: false })
+}
+
+function isExpired(s: string): boolean {
+  return new Date(s).getTime() < Date.now()
+}
+
+function isExpiringSoon(s: string): boolean {
+  const ms = new Date(s).getTime() - Date.now()
+  return ms > 0 && ms < 7 * 24 * 3600 * 1000 // 7 天内
 }

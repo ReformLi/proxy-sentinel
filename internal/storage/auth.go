@@ -24,6 +24,7 @@ type ProxyToken struct {
 	Name       string
 	CreatedAt  time.Time
 	LastUsedAt sql.NullTime
+	ExpiresAt  sql.NullTime
 }
 
 // hashToken 代理 Token 采用 SHA-256 哈希后入库，避免数据库文件泄露导致 Token 明文外泄
@@ -101,11 +102,14 @@ func (db *DB) UserExists(ctx context.Context, username string) (bool, error) {
 }
 
 // ValidToken 校验代理 Token 是否有效（按哈希比对），有效时更新最后使用时间
-// 返回 (tokenID, rateLimitRPM, 是否有效, 错误)；rate_limit_rpm=0 表示跟随全局默认
+// 过期 Token 视同无效（SQL 层面排除）；返回 (tokenID, rateLimitRPM, 是否有效, 错误)
 func (db *DB) ValidToken(ctx context.Context, token string) (int64, int, bool, error) {
 	var id int64
 	var rpm int
-	err := db.QueryRowContext(ctx, `SELECT id, rate_limit_rpm FROM proxy_tokens WHERE token=?`, hashToken(token)).Scan(&id, &rpm)
+	err := db.QueryRowContext(ctx, `
+		SELECT id, rate_limit_rpm FROM proxy_tokens
+		WHERE token=? AND (expires_at IS NULL OR expires_at > datetime('now'))`,
+		hashToken(token)).Scan(&id, &rpm)
 	if err == sql.ErrNoRows {
 		return 0, 0, false, nil
 	}
@@ -124,9 +128,14 @@ func (db *DB) TokenExists(ctx context.Context, token string) (bool, error) {
 }
 
 // AddToken 新增代理 Token（存哈希），rateLimitRPM=0 表示不限流（跟随全局默认）
-func (db *DB) AddToken(ctx context.Context, token, name string, rateLimitRPM int) error {
-	_, err := db.ExecContext(ctx, `INSERT INTO proxy_tokens (token, name, rate_limit_rpm) VALUES (?, ?, ?)`,
-		hashToken(token), name, rateLimitRPM)
+// expiresAt 为零值时永不过期（存 NULL），否则按 UTC 存入
+func (db *DB) AddToken(ctx context.Context, token, name string, rateLimitRPM int, expiresAt time.Time) error {
+	var expArg interface{}
+	if !expiresAt.IsZero() {
+		expArg = expiresAt.UTC()
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO proxy_tokens (token, name, rate_limit_rpm, expires_at) VALUES (?, ?, ?, ?)`,
+		hashToken(token), name, rateLimitRPM, expArg)
 	return err
 }
 
@@ -137,12 +146,13 @@ type TokenInfo struct {
 	RateLimitRPM int        `json:"rate_limit_rpm"`
 	CreatedAt    time.Time  `json:"created_at"`
 	LastUsedAt   *time.Time `json:"last_used_at"`
+	ExpiresAt    *time.Time `json:"expires_at"`
 }
 
 // ListTokens 列出全部代理 Token 元数据（按创建时间正序）
 func (db *DB) ListTokens(ctx context.Context) ([]TokenInfo, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, name, rate_limit_rpm, created_at, last_used_at FROM proxy_tokens ORDER BY id`)
+		`SELECT id, name, rate_limit_rpm, created_at, last_used_at, expires_at FROM proxy_tokens ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -151,12 +161,17 @@ func (db *DB) ListTokens(ctx context.Context) ([]TokenInfo, error) {
 	for rows.Next() {
 		var t TokenInfo
 		var lastUsed sql.NullTime
-		if err := rows.Scan(&t.ID, &t.Name, &t.RateLimitRPM, &t.CreatedAt, &lastUsed); err != nil {
+		var expires sql.NullTime
+		if err := rows.Scan(&t.ID, &t.Name, &t.RateLimitRPM, &t.CreatedAt, &lastUsed, &expires); err != nil {
 			return nil, err
 		}
 		if lastUsed.Valid {
 			u := lastUsed.Time
 			t.LastUsedAt = &u
+		}
+		if expires.Valid {
+			e := expires.Time
+			t.ExpiresAt = &e
 		}
 		out = append(out, t)
 	}
@@ -167,9 +182,10 @@ func (db *DB) ListTokens(ctx context.Context) ([]TokenInfo, error) {
 func (db *DB) GetToken(ctx context.Context, id int64) (*TokenInfo, error) {
 	var t TokenInfo
 	var lastUsed sql.NullTime
+	var expires sql.NullTime
 	err := db.QueryRowContext(ctx,
-		`SELECT id, name, rate_limit_rpm, created_at, last_used_at FROM proxy_tokens WHERE id=?`, id).
-		Scan(&t.ID, &t.Name, &t.RateLimitRPM, &t.CreatedAt, &lastUsed)
+		`SELECT id, name, rate_limit_rpm, created_at, last_used_at, expires_at FROM proxy_tokens WHERE id=?`, id).
+		Scan(&t.ID, &t.Name, &t.RateLimitRPM, &t.CreatedAt, &lastUsed, &expires)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -179,6 +195,10 @@ func (db *DB) GetToken(ctx context.Context, id int64) (*TokenInfo, error) {
 	if lastUsed.Valid {
 		u := lastUsed.Time
 		t.LastUsedAt = &u
+	}
+	if expires.Valid {
+		e := expires.Time
+		t.ExpiresAt = &e
 	}
 	return &t, nil
 }

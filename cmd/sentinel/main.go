@@ -226,7 +226,7 @@ func bootstrap(db *storage.DB, cfg *config.Config) error {
 		}
 		if !exists {
 			name := fmt.Sprintf("token-%d", i+1)
-			if err := db.AddToken(ctx, t, name, 0); err != nil {
+			if err := db.AddToken(ctx, t, name, 0, time.Time{}); err != nil {
 				return fmt.Errorf("创建 Token 失败: %w", err)
 			}
 			log.Printf("已初始化代理 Token [name=%s] [value=%s... (已截断，完整值请查看 config.yaml 或 PROXY_TOKENS)]",

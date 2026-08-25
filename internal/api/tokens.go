@@ -38,9 +38,10 @@ func (s *Server) listTokens(w http.ResponseWriter, r *http.Request) {
 }
 
 type createTokenRequest struct {
-	Name         string `json:"name"`
-	Token        string `json:"token"`         // 可选：不传则自动生成
-	RateLimitRPM int    `json:"rate_limit_rpm"` // 0 = 跟随全局默认
+	Name          string `json:"name"`
+	Token         string `json:"token"`          // 可选：不传则自动生成
+	RateLimitRPM  int    `json:"rate_limit_rpm"` // 0 = 跟随全局默认
+	ExpiresInDays *int   `json:"expires_in_days"` // nil/0 = 永不过期；>0 则 N 天后失效
 }
 
 // createToken POST /api/tokens —— 新增 Token，明文值仅在本次响应中返回一次
@@ -63,6 +64,10 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "限流值不能为负数")
 		return
 	}
+	if req.ExpiresInDays != nil && *req.ExpiresInDays < 1 {
+		writeError(w, http.StatusBadRequest, "过期天数必须 ≥1 或留空（永不过期）")
+		return
+	}
 
 	// Token 值：用户指定或自动生成
 	token := strings.TrimSpace(req.Token)
@@ -78,6 +83,12 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 过期时间：nil 或 0 = 永不过期（零值）；否则 N 天后失效
+	var expiresAt time.Time
+	if req.ExpiresInDays != nil && *req.ExpiresInDays > 0 {
+		expiresAt = time.Now().AddDate(0, 0, *req.ExpiresInDays)
+	}
+
 	exists, err := s.db.TokenExists(r.Context(), token)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "查询 Token 失败: "+err.Error())
@@ -88,18 +99,22 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.db.AddToken(r.Context(), token, name, req.RateLimitRPM); err != nil {
+	if err := s.db.AddToken(r.Context(), token, name, req.RateLimitRPM, expiresAt); err != nil {
 		writeError(w, http.StatusInternalServerError, "创建 Token 失败: "+err.Error())
 		return
 	}
 
 	auth.Audit(auditCtx(r), s.db, auth.UsernameFromContext(r.Context()), "token_created", ipFromRequest(r))
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"message":       "Token 已创建，明文值仅本次返回，请立即保存",
-		"token":         token,
-		"name":          name,
+	resp := map[string]any{
+		"message":        "Token 已创建，明文值仅本次返回，请立即保存",
+		"token":          token,
+		"name":           name,
 		"rate_limit_rpm": req.RateLimitRPM,
-	})
+	}
+	if !expiresAt.IsZero() {
+		resp["expires_at"] = expiresAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 type updateTokenRequest struct {
