@@ -1,3 +1,0 @@
-# 此目录由 `cd web/frontend && npm install && npm run build` 生成构建产物
-# 内容不入库；此占位文件仅用于让 `//go:embed all:dist` 在 clone 后不报错
-# 真正的静态资源请先执行上述命令生成
