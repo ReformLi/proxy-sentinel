@@ -166,3 +166,10 @@ func (db *DB) DeleteHealthBefore(ctx context.Context, before time.Time) (int64, 
 	}
 	return res.RowsAffected()
 }
+
+// CountHealthLogs 返回当前健康检查日志总条数
+func (db *DB) CountHealthLogs(ctx context.Context) (int64, error) {
+	var n int64
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM backend_health_logs`).Scan(&n)
+	return n, err
+}

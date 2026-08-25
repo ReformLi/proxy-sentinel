@@ -23,12 +23,14 @@ type settingsInfo struct {
 }
 
 type logSettings struct {
-	Level         string  `json:"level"`
-	SampleRate    float64 `json:"sample_rate"`
-	RetentionDays int     `json:"retention_days"`
-	MaskSensitive bool    `json:"mask_sensitive"`
-	BodyMaxBytes  int     `json:"body_max_bytes"`
-	QueueCapacity int     `json:"queue_capacity"` // 异步队列上限（满时丢弃最旧；0=不限制），改后重启生效
+	Level               string  `json:"level"`
+	SampleRate          float64 `json:"sample_rate"`
+	RetentionDays       int     `json:"retention_days"`
+	HealthRetentionDays int     `json:"health_retention_days"` // backend_health_logs 保留天数（0=不自动清理），改后重启生效
+	AuditRetentionDays  int     `json:"audit_retention_days"`  // audit_logs 保留天数（0=不自动清理），改后重启生效
+	MaskSensitive       bool    `json:"mask_sensitive"`
+	BodyMaxBytes        int     `json:"body_max_bytes"`
+	QueueCapacity       int     `json:"queue_capacity"`        // 异步队列上限（满时丢弃最旧；0=不限制），改后重启生效
 }
 
 type proxySettings struct {
@@ -66,12 +68,14 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		Rules:    rules,
 		Rewrites: rewrites,
 		Log: logSettings{
-			Level:         s.cfg.Log.Level,
-			SampleRate:    s.cfg.Log.SampleRate,
-			RetentionDays: s.cfg.Log.RetentionDays,
-			MaskSensitive: s.cfg.Log.MaskSensitive,
-			BodyMaxBytes:  s.cfg.Log.BodyMaxBytes,
-			QueueCapacity: s.cfg.Log.QueueCapacity,
+			Level:               s.cfg.Log.Level,
+			SampleRate:          s.cfg.Log.SampleRate,
+			RetentionDays:       s.cfg.Log.RetentionDays,
+			HealthRetentionDays: s.cfg.Log.HealthRetentionDays,
+			AuditRetentionDays:  s.cfg.Log.AuditRetentionDays,
+			MaskSensitive:       s.cfg.Log.MaskSensitive,
+			BodyMaxBytes:        s.cfg.Log.BodyMaxBytes,
+			QueueCapacity:       s.cfg.Log.QueueCapacity,
 		},
 		Proxy: proxySettings{
 			TimeoutSeconds:        s.cfg.Proxy.TimeoutSeconds,

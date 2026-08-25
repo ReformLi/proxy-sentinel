@@ -145,8 +145,8 @@ func main() {
 	)
 	defer server.Close()
 
-	// 7. 日志保留期清理（每小时检查一次过期数据）
-	stopRetention := startRetention(db, cfg.Log.RetentionDays)
+	// 7. 日志保留期清理（每小时检查一次过期数据；三表独立保留期）
+	stopRetention := startRetention(db, cfg.Log.RetentionDays, cfg.Log.HealthRetentionDays, cfg.Log.AuditRetentionDays)
 	defer stopRetention()
 
 	// 8. 启动 HTTP 服务
@@ -236,9 +236,10 @@ func bootstrap(db *storage.DB, cfg *config.Config) error {
 	return nil
 }
 
-// startRetention 启动日志保留期清理协程，返回停止函数
-func startRetention(db *storage.DB, retentionDays int) func() {
-	if retentionDays <= 0 {
+// startRetention 启动保留期清理协程（三表独立保留期），返回停止函数
+// 各表 days=0 表示不自动清理
+func startRetention(db *storage.DB, logDays, healthDays, auditDays int) func() {
+	if logDays <= 0 && healthDays <= 0 && auditDays <= 0 {
 		return func() {}
 	}
 	ticker := time.NewTicker(1 * time.Hour)
@@ -247,19 +248,35 @@ func startRetention(db *storage.DB, retentionDays int) func() {
 		for {
 			select {
 			case <-ticker.C:
-				before := time.Now().AddDate(0, 0, -retentionDays)
-				n, err := db.DeleteLogsBefore(context.Background(), before)
-				if err != nil {
-					log.Printf("清理过期日志失败: %v", err)
-					continue
+				// proxy_logs
+				if logDays > 0 {
+					before := time.Now().AddDate(0, 0, -logDays)
+					n, err := db.DeleteLogsBefore(context.Background(), before)
+					if err != nil {
+						log.Printf("清理过期 proxy_logs 失败: %v", err)
+					} else if n > 0 {
+						log.Printf("已清理 %d 条过期 proxy_logs（>%d 天）", n, logDays)
+					}
 				}
-				if n > 0 {
-					log.Printf("已清理 %d 条过期日志（>%d 天）", n, retentionDays)
+				// backend_health_logs
+				if healthDays > 0 {
+					before := time.Now().AddDate(0, 0, -healthDays)
+					hn, err := db.DeleteHealthBefore(context.Background(), before)
+					if err != nil {
+						log.Printf("清理过期 backend_health_logs 失败: %v", err)
+					} else if hn > 0 {
+						log.Printf("已清理 %d 条过期 backend_health_logs（>%d 天）", hn, healthDays)
+					}
 				}
-				if hn, err := db.DeleteHealthBefore(context.Background(), before); err != nil {
-					log.Printf("清理过期健康检查日志失败: %v", err)
-				} else if hn > 0 {
-					log.Printf("已清理 %d 条过期健康检查记录（>%d 天）", hn, retentionDays)
+				// audit_logs
+				if auditDays > 0 {
+					before := time.Now().AddDate(0, 0, -auditDays)
+					an, err := db.DeleteAuditsBefore(context.Background(), before)
+					if err != nil {
+						log.Printf("清理过期 audit_logs 失败: %v", err)
+					} else if an > 0 {
+						log.Printf("已清理 %d 条过期 audit_logs（>%d 天）", an, auditDays)
+					}
 				}
 			case <-done:
 				ticker.Stop()

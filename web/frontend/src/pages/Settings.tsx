@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BellRing, GitBranch, Plus, RefreshCw, Replace, Save, Send, ShieldAlert, Trash2, Undo2 } from 'lucide-react'
+import { BellRing, Database, GitBranch, Plus, RefreshCw, Replace, Save, Send, ShieldAlert, Trash2, Undo2 } from 'lucide-react'
 import { api, type AlertConfigInfo, type AlertRules, type IPACLConfig, type IPACLDefault, type IPACLEntry, type IPACLMode, type RewriteRule, type RouteRule, type RouteRuleType, type SettingsInfo } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input, Select } from '@/components/ui/input'
@@ -381,9 +381,12 @@ export default function Settings() {
             <dl className="space-y-2 text-sm">
               <Row k="日志级别" v={info?.log.level ?? '—'} />
               <Row k="采样率" v={String(info?.log.sample_rate ?? '—')} />
-              <Row k="保留天数" v={`${info?.log.retention_days ?? '—'} 天`} />
+              <Row k="代理日志保留" v={fmtDays(info?.log.retention_days)} />
+              <Row k="健康日志保留" v={fmtDays(info?.log.health_retention_days)} />
+              <Row k="审计日志保留" v={fmtDays(info?.log.audit_retention_days)} />
               <Row k="敏感字段脱敏" v={info?.log.mask_sensitive ? '开启' : '关闭'} />
               <Row k="日志体截断上限" v={`${fmtBytes(info?.log.body_max_bytes)}`} />
+              <Row k="异步队列上限" v={fmtNum(info?.log.queue_capacity)} />
             </dl>
           </CardContent>
         </Card>
@@ -395,7 +398,8 @@ export default function Settings() {
           <CardContent>
             <dl className="space-y-2 text-sm">
               <Row k="超时时间" v={`${info?.proxy.timeout_seconds ?? '—'} 秒`} />
-              <Row k="最大请求体" v={fmtBytes(info?.proxy.max_body_bytes)} />
+              <Row k="最大请求体（小请求读内存）" v={fmtBytes(info?.proxy.max_body_bytes)} />
+              <Row k="流式上传上限（大请求透传）" v={fmtBytes(info?.proxy.max_upload_bytes)} />
               <Row k="信任转发头 (XFF)" v={info?.proxy.trust_forwarded_headers ? '是' : '否'} />
               <Row
                 k="默认限流（每 Token）"
@@ -411,6 +415,9 @@ export default function Settings() {
 
       {/* IP 访问控制 */}
       <IPACLCard />
+
+      {/* 数据维护 */}
+      <MaintenanceCard />
     </div>
   )
 }
@@ -903,7 +910,217 @@ function Row({ k, v }: { k: string; v: string }) {
 
 function fmtBytes(n: number | undefined): string {
   if (n === undefined) return '—'
-  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(0)} MB`
+  if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(2)} MB`
   if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`
   return `${n} B`
+}
+
+function fmtDays(n: number | undefined): string {
+  if (n === undefined) return '—'
+  if (n === 0) return '关闭（不自动清理）'
+  return `${n} 天`
+}
+
+function fmtNum(n: number | undefined): string {
+  if (n === undefined) return '—'
+  if (n === 0) return '不限制'
+  return n.toLocaleString()
+}
+
+/** 数据维护：表状态 + 手动清理 */
+function MaintenanceCard() {
+  const [stats, setStats] = useState<import('@/lib/api').MaintenanceStats | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [purging, setPurging] = useState(false)
+  const [sel, setSel] = useState<Record<string, boolean>>({ log: true, health: false, audit: false })
+  const [keepDays, setKeepDays] = useState<number>(7)
+  const [confirm, setConfirm] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [msgType, setMsgType] = useState<'error' | 'success'>('error')
+
+  const load = useCallback(() => {
+    setLoading(true)
+    api
+      .get<import('@/lib/api').MaintenanceStats>('/api/maintenance/stats')
+      .then((d) => {
+        setStats(d)
+        setMsg('')
+      })
+      .catch((e) => {
+        setMsgType('error')
+        setMsg(e instanceof Error ? e.message : '加载失败')
+      })
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  const purged = (d: Record<string, number>): string => {
+    const names: Record<string, string> = { log: '代理日志', health: '健康检查', audit: '审计日志' }
+    return Object.entries(d)
+      .map(([k, v]) => `${names[k] ?? k} ${v.toLocaleString()} 条`)
+      .join('、')
+  }
+
+  const purge = async () => {
+    const tables = (Object.keys(sel) as Array<keyof typeof sel>).filter((k) => sel[k])
+    if (tables.length === 0) {
+      setMsgType('error')
+      setMsg('至少选择一个要清理的表')
+      return
+    }
+    if (keepDays <= 0 || !Number.isFinite(keepDays)) {
+      setMsgType('error')
+      setMsg('保留天数必须大于 0')
+      return
+    }
+    if (!confirm) {
+      setMsgType('error')
+      setMsg('请先勾选确认删除（数据不可恢复）')
+      return
+    }
+    if (!window.confirm(`确认清理：保留最近 ${keepDays} 天，删除：${tables.join('、')}。数据不可恢复！`)) return
+    setPurging(true)
+    setMsg('')
+    try {
+      const r = await api.post<import('@/lib/api').PurgeResult>('/api/maintenance/purge', {
+        tables,
+        keep_days: keepDays,
+        confirm: true,
+      })
+      setMsgType('success')
+      const total = Object.values(r.deleted).reduce((a, b) => a + b, 0)
+      setMsg(total > 0 ? `清理完成：共删除 ${purged(r.deleted)}` : '没有符合条件的记录可清理')
+      setConfirm(false)
+      load()
+    } catch (e) {
+      setMsgType('error')
+      setMsg(e instanceof Error ? e.message : '清理失败')
+    } finally {
+      setPurging(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Database className="h-4 w-4" /> 数据维护
+        </CardTitle>
+        <CardDescription>
+          自动保留期在 config.yaml 修改后重启生效；此处可手动按天数清理数据
+          {stats && (
+            <span className="ml-2 text-muted-foreground">
+              （数据库文件合计 {fmtBytes(stats.db_size_bytes)}）
+            </span>
+          )}
+          {loading && <span className="ml-2 text-muted-foreground">加载中…</span>}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* 表状态表格 */}
+        <div className="overflow-hidden rounded-md border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50">
+              <tr>
+                <th className="w-10 px-3 py-2 text-left">
+                  <span className="sr-only">选择</span>
+                </th>
+                <th className="px-3 py-2 text-left font-medium">数据类型</th>
+                <th className="px-3 py-2 text-right font-medium">当前条数</th>
+                <th className="px-3 py-2 text-right font-medium">估算大小</th>
+                <th className="px-3 py-2 text-right font-medium">自动保留期</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(stats?.tables ?? []).map((t) => (
+                <tr key={t.table} className="border-t last:border-0">
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={sel[t.table] ?? false}
+                      onChange={(e) => setSel((s) => ({ ...s, [t.table]: e.target.checked }))}
+                      className="h-4 w-4 cursor-pointer accent-primary"
+                    />
+                  </td>
+                  <td className="px-3 py-2 font-medium">{t.label}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{t.count.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtBytes(t.size_bytes)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {t.retention_days === 0 ? (
+                      <Badge variant="outline">关闭</Badge>
+                    ) : (
+                      <span>{t.retention_days} 天</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {!stats?.tables.length && !loading && (
+                <tr>
+                  <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
+                    暂无数据
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* 手动清理操作 */}
+        <div className="flex flex-wrap items-end gap-4 rounded-md border p-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-muted-foreground">保留最近天数</label>
+            <Select
+              value={String(keepDays)}
+              onChange={(e) => setKeepDays(Number(e.target.value))}
+              className="w-40"
+            >
+              {[1, 3, 7, 14, 30, 90, 180].map((d) => (
+                <option key={d} value={d}>
+                  {d} 天
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex items-end">
+            <label className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2.5">
+              <input
+                type="checkbox"
+                checked={confirm}
+                onChange={(e) => setConfirm(e.target.checked)}
+                className="h-4 w-4 cursor-pointer accent-destructive"
+              />
+              <span className="text-sm text-destructive">
+                确认删除（保留 {keepDays} 天内的数据，更早的不可恢复）
+              </span>
+            </label>
+          </div>
+          <div className="flex items-end gap-2">
+            <Button variant="outline" onClick={load} disabled={loading}>
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              刷新
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={purge}
+              disabled={purging || loading}
+              className="shadow-sm"
+            >
+              <Trash2 className="h-4 w-4" />
+              {purging ? '清理中…' : '执行清理'}
+            </Button>
+          </div>
+        </div>
+
+        {msg && (
+          <p className={`text-sm ${msgType === 'error' ? 'text-destructive' : 'text-emerald-600 dark:text-emerald-400'}`}>
+            {msg}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
 }

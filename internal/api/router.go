@@ -160,6 +160,10 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("GET /api/ip-acl", webJSON(http.HandlerFunc(s.getIPACL)))
 	mux.Handle("PUT /api/ip-acl", webJSON(http.HandlerFunc(s.updateIPACL)))
 
+	// 数据维护（统计 + 手动清理）
+	mux.Handle("GET /api/maintenance/stats", webJSON(http.HandlerFunc(s.getMaintenanceStats)))
+	mux.Handle("POST /api/maintenance/purge", webJSON(http.HandlerFunc(s.postMaintenancePurge)))
+
 	// 反向代理路由（IP 黑白名单 → Bearer Token 认证 → 按 Token 限流）
 	mux.Handle("/proxy/", s.ipACLMiddleware(s.proxyAuth.Middleware(s.rateLimitMiddleware(s.proxyH))))
 

@@ -51,12 +51,14 @@ type AuthConfig struct {
 }
 
 type LogConfig struct {
-	Level          string  `yaml:"level"`
-	SampleRate     float64 `yaml:"sample_rate"`
-	RetentionDays  int     `yaml:"retention_days"`
-	MaskSensitive  bool    `yaml:"mask_sensitive"`
-	BodyMaxBytes   int     `yaml:"body_max_bytes"`    // 日志记录的请求/响应体截断上限
-	QueueCapacity  int     `yaml:"queue_capacity"`    // 异步日志队列容量上限（满时丢弃最旧；0=不限制）
+	Level                string  `yaml:"level"`
+	SampleRate           float64 `yaml:"sample_rate"`
+	RetentionDays        int     `yaml:"retention_days"`         // proxy_logs 保留天数（0=不自动清理）
+	HealthRetentionDays  int     `yaml:"health_retention_days"`  // backend_health_logs 保留天数（0=不自动清理）
+	AuditRetentionDays   int     `yaml:"audit_retention_days"`   // audit_logs 保留天数（0=不自动清理）
+	MaskSensitive        bool    `yaml:"mask_sensitive"`
+	BodyMaxBytes         int     `yaml:"body_max_bytes"`    // 日志记录的请求/响应体截断上限
+	QueueCapacity        int     `yaml:"queue_capacity"`    // 异步日志队列容量上限（满时丢弃最旧；0=不限制）
 }
 
 // RateLimitConfig 限流配置：按 Token 维度限制每分钟请求数
@@ -206,12 +208,14 @@ func defaultConfig() *Config {
 			AdminUsername: "admin",
 		},
 		Log: LogConfig{
-			Level:         "info",
-			SampleRate:    1.0,
-			RetentionDays: 30,
-			MaskSensitive: true,
-			BodyMaxBytes:  64 * 1024, // 64KB：日志缓冲独立上限，防止大响应撑爆内存
-			QueueCapacity: 10000,     // 异步队列上限（满时丢弃最旧），0=不限制
+			Level:               "info",
+			SampleRate:          1.0,
+			RetentionDays:       30,   // proxy_logs：30 天
+			HealthRetentionDays: 14,   // backend_health_logs：14 天（趋势图 2 周足够）
+			AuditRetentionDays:  180,  // audit_logs：180 天（合规留存 6 个月）
+			MaskSensitive:       true,
+			BodyMaxBytes:        64 * 1024, // 64KB：日志缓冲独立上限，防止大响应撑爆内存
+			QueueCapacity:       10000,     // 异步队列上限（满时丢弃最旧），0=不限制
 		},
 	}
 }
@@ -285,6 +289,16 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("LOG_RETENTION_DAYS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Log.RetentionDays = n
+		}
+	}
+	if v := os.Getenv("LOG_HEALTH_RETENTION_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Log.HealthRetentionDays = n
+		}
+	}
+	if v := os.Getenv("LOG_AUDIT_RETENTION_DAYS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Log.AuditRetentionDays = n
 		}
 	}
 	if v := os.Getenv("LOG_MASK_SENSITIVE"); v != "" {
@@ -382,6 +396,12 @@ func (c *Config) validate() ([]string, error) {
 	}
 	if c.Log.QueueCapacity < 0 {
 		c.Log.QueueCapacity = 0 // 负数归零（0 = 不限制）
+	}
+	if c.Log.HealthRetentionDays < 0 {
+		c.Log.HealthRetentionDays = 0 // 负数归零（0 = 不自动清理）
+	}
+	if c.Log.AuditRetentionDays < 0 {
+		c.Log.AuditRetentionDays = 0 // 负数归零（0 = 不自动清理）
 	}
 	return warnings, nil
 }

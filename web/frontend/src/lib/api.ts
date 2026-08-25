@@ -154,18 +154,46 @@ export interface SettingsInfo {
     level: string
     sample_rate: number
     retention_days: number
+    health_retention_days: number
+    audit_retention_days: number
     mask_sensitive: boolean
     body_max_bytes: number
+    queue_capacity: number
   }
   proxy: {
     timeout_seconds: number
     max_body_bytes: number
+    max_upload_bytes: number
     trust_forwarded_headers: boolean
   }
   rate_limit: {
     default_rpm: number
   }
   managed: boolean
+}
+
+export interface MaintenanceTableStat {
+  table: 'log' | 'health' | 'audit'
+  label: string
+  count: number
+  size_bytes: number
+  retention_days: number
+  time_column: string
+}
+
+export interface MaintenanceStats {
+  db_size_bytes: number
+  tables: MaintenanceTableStat[]
+}
+
+export interface PurgeRequest {
+  tables: Array<'log' | 'health' | 'audit'>
+  keep_days: number
+  confirm: true
+}
+
+export interface PurgeResult {
+  deleted: Record<string, number>
 }
 
 export interface TokenInfo {

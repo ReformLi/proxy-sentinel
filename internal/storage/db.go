@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -165,4 +166,30 @@ func (db *DB) addColumnIfMissing(table, column, def string) error {
 	}
 	_, err = db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, def))
 	return err
+}
+
+// DatabaseSize 返回数据库文件总大小（字节）；通过 page_count * page_size 估算，兼容现代 SQLite
+func (db *DB) DatabaseSize(ctx context.Context) (int64, error) {
+	var pageCount, pageSize int64
+	if err := db.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
+		return 0, err
+	}
+	if err := db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		return 0, err
+	}
+	return pageCount * pageSize, nil
+}
+
+// TableSize 单表估算大小（字节）：page_count * page_size，取 main 库中指定表的全部页数（含叶子+内部页）
+func (db *DB) TableSize(ctx context.Context, table string) (int64, error) {
+	// dbstat 表在 SQLite 3.26+ 可用（2018-10 发布，modernc.org 已跟进）；失败退化为 0
+	row := db.QueryRowContext(ctx, "SELECT SUM(pgsize) FROM dbstat WHERE name = ?", table)
+	var sz sql.NullInt64
+	if err := row.Scan(&sz); err != nil {
+		return 0, nil // 老 SQLite 没 dbstat 时静默降级
+	}
+	if !sz.Valid {
+		return 0, nil
+	}
+	return sz.Int64, nil
 }

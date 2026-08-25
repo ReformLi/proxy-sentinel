@@ -212,3 +212,27 @@ func (db *DB) DeleteLogsBefore(ctx context.Context, before time.Time) (int64, er
 	n, _ := res.RowsAffected()
 	return n, nil
 }
+
+// CountAllLogs 返回当前代理日志总条数（全量，不按过滤）
+func (db *DB) CountAllLogs(ctx context.Context) (int64, error) {
+	var n int64
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM proxy_logs`).Scan(&n)
+	return n, err
+}
+
+// DeleteAuditsBefore 删除早于指定时间的审计日志
+func (db *DB) DeleteAuditsBefore(ctx context.Context, before time.Time) (int64, error) {
+	res, err := db.ExecContext(ctx, `DELETE FROM audit_logs WHERE created_at < ?`, before)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// CountAudits 返回当前审计日志总条数
+func (db *DB) CountAudits(ctx context.Context) (int64, error) {
+	var n int64
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_logs`).Scan(&n)
+	return n, err
+}

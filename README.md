@@ -48,6 +48,7 @@
 - 完整记录：方法、路径、Headers、请求/响应体、状态码、耗时、客户端 IP/UA/Referer、命中的后端、链路 ID
 - 异步批量落盘（满 100 条或每 5s 单事务提交），不阻塞请求响应
 - **队列容量上限**（`queue_capacity` 默认 10000，0=不限制）：DB 写入慢导致队列堆积时丢弃最旧日志并输出降级告警，防止 OOM
+- **三表独立保留期**：`retention_days`（proxy_logs，默认 30）、`health_retention_days`（backend_health_logs，默认 14）、`audit_retention_days`（audit_logs，默认 180）；0 = 不自动清理；配置管理页面「数据维护」卡片可查看条数/大小并手动按天数清理（带确认保护）
 - 敏感字段自动脱敏（`Authorization`、`Cookie`、`Password` 等）
 - 采样率可配置（高并发下降采样）、保留天数自动清理（默认 30 天）
 
@@ -162,6 +163,8 @@ log:
   level: debug                 # debug | info | warn | error
   sample_rate: 1.0             # 1.0=全量记录，0.1=采样 10%
   retention_days: 30           # 日志保留天数（自动清理）
+  health_retention_days: 14    # 健康检查日志保留天数（0=不清理）
+  audit_retention_days: 180    # 审计日志保留天数（0=不清理）
   mask_sensitive: true         # 敏感字段脱敏
   body_max_bytes: 65536        # 日志记录的请求/响应体截断上限
   queue_capacity: 10000       # 异步队列上限（满时丢弃最旧+告警）；0=不限制
@@ -299,6 +302,7 @@ scp sentinel root@your-server:/usr/local/bin/
 - [x] 路径重写规则（前缀替换、剥离前缀、限定后端）
 - [x] 后端健康监控（探测落库、RTT 趋势、可用率、延迟告警联动）
 - [x] Token 过期时间与状态徽标（可选过期、作废标记、强制轮换）
+- [x] 数据持久化治理：三表独立保留期 + 页面「数据维护」手动清理
 - [ ] 单机压测 QPS ≥ 2000、内存 < 300MB（待实测）
 
 ## 9. 未实现项（V1.1 计划，均为原 P2）
