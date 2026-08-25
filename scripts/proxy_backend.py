@@ -18,14 +18,14 @@ Mock 后端服务 for Proxy Sentinel 测试
 打开多个终端窗口（推荐，最简单）
 
 启动第一个实例：
-python proxy_backend.py --port 18080
+python proxy_backend.py --port 18080 --error-rate 0
 点击终端左上角的 + 号，新建一个终端标签页（或按 Ctrl+Shift+T）。
 
 在第二个终端中启动第二个实例：
-python proxy_backend.py --port 18081
+python proxy_backend.py --port 18081 --error-rate 10
 
 再新建一个终端，启动第三个实例：
-python proxy_backend.py --port 18082
+python proxy_backend.py --port 18082 --error-rate 30
 
 """
 #!/usr/bin/env python3
