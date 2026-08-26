@@ -267,6 +267,7 @@ proxy-sentinel/
 ├── scripts/benchmark.go        # 压测客户端（Go goroutine 池，可跑 4000+ QPS）
 ├── Dockerfile
 ├── docker-compose.yml          # 部署编排：docker compose up -d 一键起（见第 6 节）
+├── DEPLOYMENT.md               # 部署手册：单实例约束/systemd/Docker/Nginx/备份/升级/排障
 ├── config.example.yaml         # 通用配置示例（复制为 config.yaml 后使用，真实 config.yaml 不入库）
 ├── bench-sentinel.example.yaml # 压测专用配置示例（复制为 bench-sentinel.yaml 后使用，详见 BENCHMARK_REPORT.md）
 └── go.mod
@@ -275,6 +276,10 @@ proxy-sentinel/
 ---
 
 ## 6. 部署
+
+> **完整部署手册**（单实例约束说明、systemd/Nginx/HTTPS、备份恢复、升级回滚、故障排查）：[DEPLOYMENT.md](DEPLOYMENT.md)
+>
+> ⚠ **V1 仅支持单实例部署**：限流、登录锁定、用户缓存等状态在进程内存中，多副本会导致限流配额翻倍、防爆破失效；SQLite 多进程写同一文件会锁死。详见手册第 1 章。
 
 ### Docker Compose（推荐）
 
@@ -356,8 +361,34 @@ scp sentinel root@your-server:/usr/local/bin/
 - [x] 用户管理与角色权限（admin/viewer、多用户增删、删除即失效）
 - [x] 单机压测 QPS ≥ 2000、内存 < 300MB（实测 QPS=4443，P99=56ms，RSS 峰值 59MB → [BENCHMARK_REPORT.md](BENCHMARK_REPORT.md)）
 
-## 9. 未实现项（V1.1 计划，均为原 P2）
+## 9. 未实现项（V1.1+ 规划）
 
-- WebSocket 透传
+### 9.1 遗留未实现（原 P2）
+
+- WebSocket 透传（代理层已实现 Hijack 支持，待实测验证与文档确认）
 - JSON/PDF 格式导出（当前仅 CSV）
-- 性能压测报告
+- ~~性能压测报告~~ → 已完成：[BENCHMARK_REPORT.md](BENCHMARK_REPORT.md)
+
+### 9.2 可靠性 / 可用性增强
+
+- **故障转移自动重试**：GET/HEAD 请求失败自动切换后端重试一次（POST 不重试，防止非幂等请求重放）
+- **后端熔断器**：连续 N 次失败 → 熔断 M 秒再半开探测（当前为单次失败即标记下线、依赖健康检查恢复，对抖动敏感）
+- **多实例 / 高可用**：限流、登录锁定、用户缓存迁移到 Redis 共享存储，支持多副本部署（V1 为单实例架构，约束见 [DEPLOYMENT.md](DEPLOYMENT.md) 第 1 章）
+- **配置热重载**：`log.level` 等运行期可变项改后即时生效（当前部分配置需重启）
+
+### 9.3 运维 / 可观测性
+
+- **Prometheus `/metrics` 端点**：标准指标暴露，接入 Grafana 生态（替代/补充自建看板）
+- **Token 用量统计与配额**：按 Token 维度的 QPS / 流量趋势，超限告警（审计与日志数据已具备基础）
+- **数据库备份/恢复**：维护页一键备份下载、上传恢复（当前需命令行操作，见 DEPLOYMENT.md 第 10 章）
+
+### 9.4 安全补强
+
+- **在线会话管理**：面板查看活跃会话列表 + 单点强制下线（基于 token_version 机制扩展，改密码踢人已实现）
+- **审计日志防篡改**：hash 链式校验，每条记录含前条哈希
+
+### 9.5 工程化 / 体验
+
+- **CI（GitHub Actions）**：gofmt + go vet + go test + 前端 tsc，PR 门禁
+- **请求重放**：日志详情页一键重放该请求（排障利器）
+- **前端暗色模式 / i18n**
