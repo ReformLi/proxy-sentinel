@@ -82,6 +82,55 @@ func (db *DB) GetUserByUsername(ctx context.Context, username string) (*User, er
 	return u, nil
 }
 
+// UserInfo 用户列表项（不含密码哈希）
+type UserInfo struct {
+	ID        int64     `json:"id"`
+	Username  string    `json:"username"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListUsers 列出全部用户（按 ID 正序，不含密码哈希）
+func (db *DB) ListUsers(ctx context.Context) ([]UserInfo, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id, username, created_at FROM users ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UserInfo
+	for rows.Next() {
+		var u UserInfo
+		if err := rows.Scan(&u.ID, &u.Username, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// GetUserByID 按 ID 查询用户（不含密码哈希）
+func (db *DB) GetUserByID(ctx context.Context, id int64) (*UserInfo, error) {
+	var u UserInfo
+	err := db.QueryRowContext(ctx, `SELECT id, username, created_at FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.Username, &u.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// DeleteUser 删除用户，返回是否确实删除了记录
+func (db *DB) DeleteUser(ctx context.Context, id int64) (bool, error) {
+	res, err := db.ExecContext(ctx, `DELETE FROM users WHERE id=?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // CreateUser 创建管理员账号
 func (db *DB) CreateUser(ctx context.Context, username, passwordHash string) error {
 	_, err := db.ExecContext(ctx, `INSERT INTO users (username, password_hash) VALUES (?, ?)`, username, passwordHash)

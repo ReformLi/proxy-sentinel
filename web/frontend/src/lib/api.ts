@@ -292,3 +292,16 @@ export interface BackendMonitorResp {
   window: string
   items: BackendMonitorItem[] | null
 }
+
+// ---- 用户管理 ----
+
+export interface UserInfo {
+  id: number
+  username: string
+  created_at: string
+}
+
+export interface UserListData {
+  users: UserInfo[] | null
+  current_user: string
+}

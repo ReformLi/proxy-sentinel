@@ -127,6 +127,7 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("GET /flow", webPage(spa))
 	mux.Handle("GET /backends", webPage(spa))
 	mux.Handle("GET /tokens", webPage(spa))
+	mux.Handle("GET /users", webPage(spa))
 	mux.Handle("GET /settings", webPage(spa))
 
 	// 受 WebAuth 保护的 API（返回 JSON 401）
@@ -156,6 +157,12 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("POST /api/tokens", webJSON(http.HandlerFunc(s.createToken)))
 	mux.Handle("PUT /api/tokens/{id}", webJSON(http.HandlerFunc(s.updateToken)))
 	mux.Handle("DELETE /api/tokens/{id}", webJSON(http.HandlerFunc(s.deleteToken)))
+
+	// 用户管理（写操作审计）
+	mux.Handle("GET /api/users", webJSON(http.HandlerFunc(s.listUsers)))
+	mux.Handle("POST /api/users", webJSON(http.HandlerFunc(s.createUser)))
+	mux.Handle("DELETE /api/users/{id}", webJSON(http.HandlerFunc(s.deleteUser)))
+	mux.Handle("PUT /api/users/{id}/password", webJSON(http.HandlerFunc(s.resetPassword)))
 
 	// 告警通知（规则热更新 + 连通性测试）
 	mux.Handle("GET /api/alert/config", webJSON(http.HandlerFunc(s.getAlertConfig)))

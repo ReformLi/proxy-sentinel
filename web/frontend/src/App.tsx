@@ -7,6 +7,7 @@ import AuditLogs from '@/pages/AuditLogs'
 import Flow from '@/pages/Flow'
 import Backends from '@/pages/Backends'
 import Tokens from '@/pages/Tokens'
+import Users from '@/pages/Users'
 import Settings from '@/pages/Settings'
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/flow" element={<Flow />} />
         <Route path="/backends" element={<Backends />} />
         <Route path="/tokens" element={<Tokens />} />
+        <Route path="/users" element={<Users />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
       <Route path="/" element={<Navigate to="/dashboard" replace />} />

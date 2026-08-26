@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, ScrollText, GitBranch, Settings, LogOut, KeyRound, HeartPulse, FileSearch } from 'lucide-react'
+import { LayoutDashboard, ScrollText, GitBranch, Settings, LogOut, KeyRound, HeartPulse, FileSearch, Users } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -12,6 +12,7 @@ const navItems = [
   { to: '/flow', label: '数据流向', icon: GitBranch },
   { to: '/backends', label: '后端监控', icon: HeartPulse },
   { to: '/tokens', label: 'Token 管理', icon: KeyRound },
+  { to: '/users', label: '用户管理', icon: Users },
   { to: '/settings', label: '配置管理', icon: Settings },
 ]
 
