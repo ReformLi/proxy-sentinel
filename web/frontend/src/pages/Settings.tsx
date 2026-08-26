@@ -4,6 +4,7 @@ import { api, type AlertConfigInfo, type AlertRules, type IPACLConfig, type IPAC
 import { Button } from '@/components/ui/button'
 import { Input, Select } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 /** 配置管理：后端节点/权重/策略/定向规则（运行时生效 + 数据库持久化）、只读运行参数 */
@@ -933,6 +934,7 @@ function MaintenanceCard() {
   const [stats, setStats] = useState<import('@/lib/api').MaintenanceStats | null>(null)
   const [loading, setLoading] = useState(false)
   const [purging, setPurging] = useState(false)
+  const [purgeConfirm, setPurgeConfirm] = useState(false)
   const [sel, setSel] = useState<Record<string, boolean>>({ log: true, health: false, audit: false })
   const [keepDays, setKeepDays] = useState<number>(7)
   const [confirm, setConfirm] = useState(false)
@@ -982,7 +984,13 @@ function MaintenanceCard() {
       setMsg('请先勾选确认删除（数据不可恢复）')
       return
     }
-    if (!window.confirm(`确认清理：保留最近 ${keepDays} 天，删除：${tables.join('、')}。数据不可恢复！`)) return
+    // 触发自定义确认弹框
+    setPurgeConfirm(true)
+  }
+
+  const purgeExecute = async () => {
+    setPurgeConfirm(false)
+    const tables = (Object.keys(sel) as Array<keyof typeof sel>).filter((k) => sel[k])
     setPurging(true)
     setMsg('')
     try {
@@ -1121,6 +1129,15 @@ function MaintenanceCard() {
           </p>
         )}
       </CardContent>
+
+      <ConfirmDialog
+        open={purgeConfirm}
+        title="确认清理数据"
+        message={`保留最近 ${keepDays} 天，删除：${(Object.keys(sel) as Array<keyof typeof sel>).filter((k) => sel[k]).map((k) => ({ log: '代理日志', health: '健康检查', audit: '审计日志' }[k] ?? k)).join('、')}。数据不可恢复！`}
+        confirmText="执行清理"
+        onConfirm={purgeExecute}
+        onClose={() => setPurgeConfirm(false)}
+      />
     </Card>
   )
 }

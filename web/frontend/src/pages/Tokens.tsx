@@ -5,12 +5,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Dialog } from '@/components/ui/dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 /** Token 管理：代理接口 Bearer Token 的增删改、独立限流、最后使用时间 */
 export default function Tokens() {
   const [data, setData] = useState<TokenListData | null>(null)
   const [msg, setMsg] = useState('')
+  const [revokeTarget, setRevokeTarget] = useState<{ id: number; name: string } | null>(null)
   const [busy, setBusy] = useState(false)
 
   // 新建表单
@@ -105,14 +107,17 @@ export default function Tokens() {
     }
   }
 
-  const revoke = async (id: number, name: string) => {
-    if (!window.confirm(`确定吊销 Token「${name}」？使用它的服务将立即收到 401。`)) return
+  const revoke = async () => {
+    if (!revokeTarget) return
     setBusy(true)
+    setMsg('')
     try {
-      await api.delete(`/api/tokens/${id}`)
+      await api.delete(`/api/tokens/${revokeTarget.id}`)
+      setRevokeTarget(null)
       load()
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '删除失败')
+      setRevokeTarget(null)
     } finally {
       setBusy(false)
     }
@@ -220,7 +225,7 @@ export default function Tokens() {
                       >
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button size="icon" variant="ghost" title="吊销" onClick={() => revoke(t.id, t.name)}>
+                      <Button size="icon" variant="ghost" title="吊销" onClick={() => setRevokeTarget({ id: t.id, name: t.name })}>
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </>
@@ -332,6 +337,16 @@ export default function Tokens() {
           </div>
         </div>
       </Dialog>
+
+      {/* 吊销确认弹窗 */}
+      <ConfirmDialog
+        open={!!revokeTarget}
+        title="吊销 Token"
+        message={`确定吊销 Token「${revokeTarget?.name}」？使用它的服务将立即收到 401。`}
+        confirmText="吊销"
+        onConfirm={revoke}
+        onClose={() => setRevokeTarget(null)}
+      />
     </div>
   )
 }

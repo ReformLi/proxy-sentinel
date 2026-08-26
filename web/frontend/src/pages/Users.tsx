@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Dialog } from '@/components/ui/dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 /** 用户管理：管理后台登录账号 */
@@ -23,6 +24,9 @@ export default function Users() {
   // 重置密码
   const [resetTarget, setResetTarget] = useState<{ id: number; username: string } | null>(null)
   const [resetPassword, setResetPassword] = useState('')
+
+  // 删除确认
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; username: string } | null>(null)
 
   const load = useCallback(async () => {
     setBusy(true)
@@ -69,16 +73,18 @@ export default function Users() {
     }
   }
 
-  const handleDelete = async (id: number, username: string) => {
-    if (!window.confirm(`确定删除用户 "${username}"？此操作不可撤销。`)) return
+  const handleDelete = async () => {
+    if (!deleteTarget) return
     setBusy(true)
     setMsg('')
     try {
-      await api.delete(`/api/users/${id}`)
+      await api.delete(`/api/users/${deleteTarget.id}`)
+      setMsg(`用户 "${deleteTarget.username}" 已删除`)
+      setDeleteTarget(null)
       await load()
-      setMsg(`用户 "${username}" 已删除`)
     } catch (e: any) {
       setMsg(e.message || '删除失败')
+      setDeleteTarget(null)
     } finally {
       setBusy(false)
     }
@@ -190,7 +196,7 @@ export default function Users() {
                             className="text-destructive hover:text-destructive"
                             disabled={u.username === currentUser}
                           title={u.username === currentUser ? '不能删除自己' : ''}
-                          onClick={() => handleDelete(u.id, u.username)}
+                          onClick={() => setDeleteTarget({ id: u.id, username: u.username })}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                           删除
@@ -270,6 +276,16 @@ export default function Users() {
           </div>
         </div>
       </Dialog>
+
+      {/* 删除确认弹窗 */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="删除用户"
+        message={`确定删除用户 "${deleteTarget?.username}"？此操作不可撤销，该用户将立即注销。`}
+        confirmText="删除"
+        onConfirm={handleDelete}
+        onClose={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }
