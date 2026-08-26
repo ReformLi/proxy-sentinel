@@ -111,7 +111,7 @@ func main() {
 	// 4. 创建认证组件
 	secure := os.Getenv("SECURE_COOKIE") == "true"
 	jwtMgr := auth.NewJWTManager(cfg.Auth.JWTSecret, 24*time.Hour, secure)
-	webAuth := auth.NewWebAuthMiddleware(jwtMgr)
+	webAuth := auth.NewWebAuthMiddleware(jwtMgr, db)
 	proxyAuth := auth.NewProxyAuthMiddleware(db)
 
 	// 5. 负载均衡 + 健康检查（探测结果落库） + 代理处理器 + 日志写入器

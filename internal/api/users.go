@@ -125,6 +125,7 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "用户不存在")
 		return
 	}
+	s.webAuth.InvalidateUser(user.Username)
 	auth.Audit(auditCtx(r), s.db, currentUser,
 		"删除用户: "+user.Username, ipFromRequest(r))
 	writeJSON(w, http.StatusOK, map[string]any{"message": "用户已删除"})

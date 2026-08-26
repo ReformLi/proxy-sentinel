@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"proxy-sentinel/internal/storage"
@@ -11,17 +12,27 @@ import (
 // CookieName JWT 在浏览器中的 Cookie 名称
 const CookieName = "sentinel_token"
 
+// 缓存用户存在性检查结果，避免每请求查 DB
+const userCacheTTL = 30 * time.Second
+
+type cacheEntry struct {
+	exists    bool
+	checkedAt time.Time
+}
+
 type userCtxKey struct{}
 type roleCtxKey struct{}
 
 // WebAuthMiddleware 校验可视化页面与 API 的 JWT Cookie
 type WebAuthMiddleware struct {
-	jwt *JWTManager
+	jwt   *JWTManager
+	db    *storage.DB
+	cache sync.Map // username → cacheEntry
 }
 
 // NewWebAuthMiddleware 创建 Web 认证中间件
-func NewWebAuthMiddleware(jm *JWTManager) *WebAuthMiddleware {
-	return &WebAuthMiddleware{jwt: jm}
+func NewWebAuthMiddleware(jm *JWTManager, db *storage.DB) *WebAuthMiddleware {
+	return &WebAuthMiddleware{jwt: jm, db: db}
 }
 
 // SetAuthCookie 将 JWT 写入 HttpOnly Cookie
@@ -70,11 +81,38 @@ func (m *WebAuthMiddleware) Middleware(acceptJSON bool) func(http.Handler) http.
 			if role == "" {
 				role = "admin"
 			}
+			// 验证用户是否仍存在（内存缓存 + 30s TTL）
+			if !m.userExists(r.Context(), claims.Username) {
+				m.ClearAuthCookie(w)
+				m.unauthorized(w, r, acceptJSON)
+				return
+			}
 			ctx := context.WithValue(r.Context(), userCtxKey{}, claims.Username)
 			ctx = context.WithValue(ctx, roleCtxKey{}, role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// userExists 检查用户是否仍存在（30s 内存缓存）
+func (m *WebAuthMiddleware) userExists(ctx context.Context, username string) bool {
+	if v, ok := m.cache.Load(username); ok {
+		entry := v.(cacheEntry)
+		if time.Since(entry.checkedAt) < userCacheTTL {
+			return entry.exists
+		}
+	}
+	exists := false
+	if u, err := m.db.GetUserByUsername(ctx, username); err == nil && u != nil {
+		exists = true
+	}
+	m.cache.Store(username, cacheEntry{exists: exists, checkedAt: time.Now()})
+	return exists
+}
+
+// InvalidateUser 清除指定用户的缓存（删除用户时调用，立即生效）
+func (m *WebAuthMiddleware) InvalidateUser(username string) {
+	m.cache.Delete(username)
 }
 
 func (m *WebAuthMiddleware) unauthorized(w http.ResponseWriter, r *http.Request, acceptJSON bool) {
