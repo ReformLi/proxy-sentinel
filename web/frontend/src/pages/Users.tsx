@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 export default function Users() {
   const [data, setData] = useState<UserListData | null>(null)
   const [msg, setMsg] = useState('')
+  const [dialogMsg, setDialogMsg] = useState('')
   const [busy, setBusy] = useState(false)
 
   // 新建用户
@@ -40,19 +41,19 @@ export default function Users() {
 
   const handleCreate = async () => {
     if (!newUsername.trim() || !newPassword) {
-      setMsg('用户名和密码不能为空')
+      setDialogMsg('用户名和密码不能为空')
       return
     }
     if (newUsername.trim().length < 3) {
-      setMsg('用户名至少 3 个字符')
+      setDialogMsg('用户名至少 3 个字符')
       return
     }
     if (newPassword.length < 6) {
-      setMsg('密码至少 6 位')
+      setDialogMsg('密码至少 6 位')
       return
     }
     setBusy(true)
-    setMsg('')
+    setDialogMsg('')
     try {
       await api.post('/api/users', { username: newUsername.trim(), password: newPassword, role: newRole })
       setShowCreate(false)
@@ -62,7 +63,7 @@ export default function Users() {
       await load()
       setMsg('用户创建成功')
     } catch (e: any) {
-      setMsg(e.message || '创建失败')
+      setDialogMsg(e.message || '创建失败')
     } finally {
       setBusy(false)
     }
@@ -86,18 +87,18 @@ export default function Users() {
   const handleResetPassword = async () => {
     if (!resetTarget) return
     if (resetPassword.length < 6) {
-      setMsg('密码至少 6 位')
+      setDialogMsg('密码至少 6 位')
       return
     }
     setBusy(true)
-    setMsg('')
+    setDialogMsg('')
     try {
       await api.put(`/api/users/${resetTarget.id}/password`, { password: resetPassword })
       setResetTarget(null)
       setResetPassword('')
       setMsg(`用户 "${resetTarget.username}" 密码已重置`)
     } catch (e: any) {
-      setMsg(e.message || '重置失败')
+      setDialogMsg(e.message || '重置失败')
     } finally {
       setBusy(false)
     }
@@ -129,7 +130,7 @@ export default function Users() {
               刷新
             </Button>
             {isAdmin && (
-              <Button size="sm" onClick={() => setShowCreate(true)}>
+              <Button size="sm" onClick={() => { setDialogMsg(''); setShowCreate(true) }}>
                 <Plus className="h-4 w-4" />
                 新建用户
               </Button>
@@ -178,7 +179,7 @@ export default function Users() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => { setResetTarget({ id: u.id, username: u.username }); setResetPassword('') }}
+                            onClick={() => { setResetTarget({ id: u.id, username: u.username }); setResetPassword(''); setDialogMsg('') }}
                           >
                             <Lock className="h-3.5 w-3.5" />
                             重置密码
@@ -238,7 +239,7 @@ export default function Users() {
               <option value="admin">admin（完全控制）</option>
             </select>
           </div>
-          {msg && <div className="text-sm text-destructive">{msg}</div>}
+          {dialogMsg && <div className="text-sm text-destructive">{dialogMsg}</div>}
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setShowCreate(false)}>取消</Button>
             <Button onClick={handleCreate} disabled={busy}>创建</Button>
@@ -262,7 +263,7 @@ export default function Users() {
               onKeyDown={e => { if (e.key === 'Enter') handleResetPassword() }}
             />
           </div>
-          {msg && <div className="text-sm text-destructive">{msg}</div>}
+          {dialogMsg && <div className="text-sm text-destructive">{dialogMsg}</div>}
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setResetTarget(null)}>取消</Button>
             <Button onClick={handleResetPassword} disabled={busy}>确认重置</Button>
