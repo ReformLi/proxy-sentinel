@@ -1,20 +1,65 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="shieldFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f4c3a"/>
+      <stop offset="1" stop-color="#064e3b"/>
+    </linearGradient>
+    <linearGradient id="shieldBorder" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a7f3d0"/>
+      <stop offset="1" stop-color="#6ee7b7"/>
+    </linearGradient>
+    <linearGradient id="netStroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d1fae5"/>
+      <stop offset="1" stop-color="#a7f3d0"/>
+    </linearGradient>
+    <linearGradient id="youFill" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#34d399"/>
       <stop offset="1" stop-color="#047857"/>
     </linearGradient>
   </defs>
-  <!-- 盾牌外形：哨兵/防护 -->
-  <path d="M16 2 L28 6 V15 C28 22 23 28 16 30 C9 28 4 22 4 15 V6 Z" fill="url(#shield)" stroke="#033b2a" stroke-width="0.8"/>
-  <!-- 中心网关节点 -->
-  <circle cx="16" cy="15" r="3" fill="#ffffff"/>
-  <!-- 连线：流量分发到后端 -->
-  <line x1="16" y1="15" x2="10" y2="9" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
-  <line x1="16" y1="15" x2="22" y2="9" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
-  <line x1="16" y1="15" x2="16" y2="23" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round"/>
-  <!-- 后端节点 -->
-  <circle cx="10" cy="9" r="2" fill="#ffffff"/>
-  <circle cx="22" cy="9" r="2" fill="#ffffff"/>
-  <circle cx="16" cy="23" r="2" fill="#ffffff"/>
+
+  <!-- 盾牌外边框 -->
+  <path d="M256 24 L458 78 L458 248 C458 376 350 478 256 500 C162 478 54 376 54 248 L54 78 Z"
+        fill="none" stroke="url(#shieldBorder)" stroke-width="28" stroke-linejoin="round"/>
+
+  <!-- 盾牌主体 -->
+  <path d="M256 48 L434 96 L434 248 C434 364 336 456 256 476 C176 456 78 364 78 248 L78 96 Z"
+        fill="url(#shieldFill)" stroke="#065f46" stroke-width="3" stroke-linejoin="round"/>
+
+  <!-- 网络节点与连线 -->
+  <g stroke="url(#netStroke)" stroke-width="14" stroke-linecap="round">
+    <line x1="256" y1="148" x2="358" y2="207"/>
+    <line x1="358" y1="207" x2="358" y2="325"/>
+    <line x1="358" y1="325" x2="256" y2="384"/>
+    <line x1="256" y1="384" x2="154" y2="325"/>
+    <line x1="154" y1="325" x2="154" y2="207"/>
+    <line x1="154" y1="207" x2="256" y2="148"/>
+    <line x1="256" y1="266" x2="256" y2="148"/>
+    <line x1="256" y1="266" x2="358" y2="207"/>
+    <line x1="256" y1="266" x2="358" y2="325"/>
+    <line x1="256" y1="266" x2="256" y2="384"/>
+    <line x1="256" y1="266" x2="154" y2="325"/>
+    <line x1="256" y1="266" x2="154" y2="207"/>
+    <line x1="256" y1="148" x2="256" y2="384"/>
+    <line x1="154" y1="207" x2="358" y2="325"/>
+    <line x1="358" y1="207" x2="154" y2="325"/>
+  </g>
+
+  <!-- 节点圆点 -->
+  <g fill="#ecfdf5">
+    <circle cx="256" cy="148" r="17"/>
+    <circle cx="358" cy="207" r="17"/>
+    <circle cx="358" cy="325" r="17"/>
+    <circle cx="256" cy="384" r="17"/>
+    <circle cx="154" cy="325" r="17"/>
+    <circle cx="154" cy="207" r="17"/>
+    <circle cx="256" cy="266" r="21"/>
+  </g>
+
+  <!-- 左上角'悠'字徽章（字体轮廓提取自微软雅黑 Bold，矢量无描摹） -->
+  <g>
+    <circle cx="154" cy="132" r="40" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="4"/>
+    <path transform="translate(129.82,149.41) scale(0.02359,-0.02359)"
+          d="M1166 1713 1426 1681Q1396 1611 1362 1545H1992V1321H1854Q1808 1075 1652 887Q1812 799 2024 737Q1950 633 1864 497Q1626 581 1452 705Q1282 587 1044 501Q1170 387 1298 261L1094 89Q1032 163 818 389L970 513Q886 651 840 717Q1086 789 1254 887Q1166 997 1102 1127Q1058 1067 1010 1011Q950 1075 872 1151V735H636V1531H872V1247Q1058 1465 1166 1713ZM1380 261Q1542 187 1654 145Q1614 7 1578 -69Q1502 -237 1288 -237H788Q490 -237 490 39V417H752V111Q752 -5 870 -5H1176Q1326 -5 1344 89Q1364 169 1380 261ZM380 1713 650 1679Q582 1529 494 1387V509H242V1043Q194 987 142 931Q88 1077 24 1203Q246 1449 380 1713ZM218 437 464 355Q366 63 280 -125L30 -33Q142 189 218 437ZM1726 489Q1874 305 2026 103L1806 -55Q1630 201 1512 349ZM1446 1039Q1552 1157 1598 1321H1272Q1338 1151 1446 1039Z" fill="url(#youFill)"/>
+  </g>
 </svg>
