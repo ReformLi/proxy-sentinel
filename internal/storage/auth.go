@@ -165,6 +165,8 @@ func (db *DB) UserExists(ctx context.Context, username string) (bool, error) {
 
 // ValidToken 校验代理 Token 是否有效（按哈希比对），有效时更新最后使用时间
 // 过期 Token 视同无效（SQL 层面排除）；返回 (tokenID, rateLimitRPM, 是否有效, 错误)
+// last_used_at 写入按 30s/Token 节流：该列仅用于展示，无需逐请求精确；
+// 避免 4000+ QPS 下每秒数千次 SQLite 写（校验 SELECT 仍逐请求执行，吊销保持实时生效）
 func (db *DB) ValidToken(ctx context.Context, token string) (int64, int, bool, error) {
 	var id int64
 	var rpm int
@@ -178,8 +180,26 @@ func (db *DB) ValidToken(ctx context.Context, token string) (int64, int, bool, e
 	if err != nil {
 		return 0, 0, false, err
 	}
-	_, _ = db.ExecContext(ctx, `UPDATE proxy_tokens SET last_used_at=CURRENT_TIMESTAMP WHERE id=?`, id)
+	db.markLastUsed(ctx, id)
 	return id, rpm, true, nil
+}
+
+// lastUsedInterval 同一 Token 两次 last_used_at 写入的最小间隔
+const lastUsedInterval = 30 * time.Second
+
+// markLastUsed 节流更新 last_used_at；map 惰性初始化，容量以 Token 数为上界
+func (db *DB) markLastUsed(ctx context.Context, id int64) {
+	db.lastUsedMu.Lock()
+	if db.lastUsedMark == nil {
+		db.lastUsedMark = make(map[int64]time.Time)
+	}
+	if t, ok := db.lastUsedMark[id]; ok && time.Since(t) < lastUsedInterval {
+		db.lastUsedMu.Unlock()
+		return
+	}
+	db.lastUsedMark[id] = time.Now()
+	db.lastUsedMu.Unlock()
+	_, _ = db.ExecContext(ctx, `UPDATE proxy_tokens SET last_used_at=CURRENT_TIMESTAMP WHERE id=?`, id)
 }
 
 // TokenExists 判断 Token 是否已存在（按哈希比对）

@@ -186,7 +186,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			req.Host = target.Host
 			// X-Forwarded 头：追加而非覆盖，保留可信的多级代理链
 			appendXFF(req, client, h.trustXFF)
-			req.Header.Set("X-Forwarded-Proto", scheme(r))
+			req.Header.Set("X-Forwarded-Proto", scheme(r, h.trustXFF))
 			req.Header.Set("X-Forwarded-Host", r.Host)
 			req.Header.Set("X-Request-ID", requestID) // 透传给后端，便于全链路对齐
 		},
@@ -372,12 +372,18 @@ func joinURLPath(base, fwd string) string {
 	return strings.TrimSuffix(base, "/") + "/" + strings.TrimPrefix(fwd, "/")
 }
 
-func scheme(r *http.Request) string {
+// scheme 判断发往后端的协议：
+// - 直连 TLS → https
+// - trustXFF 开启（多级反代场景）才信任 X-Forwarded-Proto，否则该头可被客户端伪造
+// - 默认 http
+func scheme(r *http.Request, trustXFF bool) string {
 	if r.TLS != nil {
 		return "https"
 	}
-	if v := r.Header.Get("X-Forwarded-Proto"); v != "" {
-		return v
+	if trustXFF {
+		if v := r.Header.Get("X-Forwarded-Proto"); v != "" {
+			return v
+		}
 	}
 	return "http"
 }

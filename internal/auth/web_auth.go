@@ -77,10 +77,11 @@ func (m *WebAuthMiddleware) Middleware(acceptJSON bool) func(http.Handler) http.
 				m.unauthorized(w, r, acceptJSON)
 				return
 			}
-			// 老令牌无 role 字段，向后兼容视为 admin
+			// 老令牌无 role 字段：按最小权限视为 viewer（而非 admin），
+			// 防止升级部署后旧版签发的令牌自动获得管理员权限；重新登录即恢复正常角色
 			role := claims.Role
 			if role == "" {
-				role = "admin"
+				role = "viewer"
 			}
 			// 验证用户是否仍存在且令牌版本未变（内存缓存 + 30s TTL）：
 			// 密码重置/角色变更会使 token_version+1，旧 JWT 立即失效，强制重新登录

@@ -10,23 +10,31 @@ import (
 	"proxy-sentinel/internal/auth"
 )
 
-// loginLimiter 防暴力破解：失败次数超限后锁定 IP 一段时间
+// loginEntry 单个 IP 的失败记录
+type loginEntry struct {
+	failures    int
+	lastFail    time.Time
+	lockedUntil time.Time
+}
+
+// loginLimiter 防暴力破解：失败次数超限后锁定 IP 一段时间。
+// 条目带时间戳，闲置超过 idleTTL 后由后台协程淘汰，防止 map 随攻击者 IP 数无限增长
 type loginLimiter struct {
-	mu          sync.Mutex
-	failures    map[string]int
-	lockedUntil map[string]time.Time
-	maxFail     int
-	lockDur     time.Duration
-	done        chan struct{}
+	mu      sync.Mutex
+	entries map[string]*loginEntry
+	maxFail int
+	lockDur time.Duration
+	idleTTL time.Duration
+	done    chan struct{}
 }
 
 func newLoginLimiter(maxFail int, lockSec int) *loginLimiter {
 	l := &loginLimiter{
-		failures:    make(map[string]int),
-		lockedUntil: make(map[string]time.Time),
-		maxFail:     maxFail,
-		lockDur:     time.Duration(lockSec) * time.Second,
-		done:        make(chan struct{}),
+		entries: make(map[string]*loginEntry),
+		maxFail: maxFail,
+		lockDur: time.Duration(lockSec) * time.Second,
+		idleTTL: 15 * time.Minute,
+		done:    make(chan struct{}),
 	}
 	go l.cleanup()
 	return l
@@ -35,16 +43,21 @@ func newLoginLimiter(maxFail int, lockSec int) *loginLimiter {
 // Stop 停止后台清理协程（由 Server.Close 调用）
 func (l *loginLimiter) Stop() { close(l.done) }
 
-// allowed 判断 IP 是否被锁定
+// allowed 判断 IP 是否被锁定。
+// 仅当该 IP 曾被锁定且锁已过期时清除记录（重新累计失败次数）；
+// 未锁定条目的失败计数必须保留，否则计数永远无法达到锁定阈值
 func (l *loginLimiter) allowed(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if until, ok := l.lockedUntil[ip]; ok {
-		if time.Now().Before(until) {
-			return false
-		}
-		delete(l.lockedUntil, ip)
-		delete(l.failures, ip)
+	e, ok := l.entries[ip]
+	if !ok {
+		return true
+	}
+	if time.Now().Before(e.lockedUntil) {
+		return false
+	}
+	if !e.lockedUntil.IsZero() {
+		delete(l.entries, ip)
 	}
 	return true
 }
@@ -53,9 +66,15 @@ func (l *loginLimiter) allowed(ip string) bool {
 func (l *loginLimiter) fail(ip string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.failures[ip]++
-	if l.failures[ip] >= l.maxFail {
-		l.lockedUntil[ip] = time.Now().Add(l.lockDur)
+	e, ok := l.entries[ip]
+	if !ok {
+		e = &loginEntry{}
+		l.entries[ip] = e
+	}
+	e.failures++
+	e.lastFail = time.Now()
+	if e.failures >= l.maxFail {
+		e.lockedUntil = e.lastFail.Add(l.lockDur)
 		return true
 	}
 	return false
@@ -65,8 +84,7 @@ func (l *loginLimiter) fail(ip string) bool {
 func (l *loginLimiter) success(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.failures, ip)
-	delete(l.lockedUntil, ip)
+	delete(l.entries, ip)
 }
 
 func (l *loginLimiter) cleanup() {
@@ -77,10 +95,11 @@ func (l *loginLimiter) cleanup() {
 		case <-ticker.C:
 			l.mu.Lock()
 			now := time.Now()
-			for ip, until := range l.lockedUntil {
-				if now.After(until) {
-					delete(l.lockedUntil, ip)
-					delete(l.failures, ip)
+			// 锁已过期 且 超过闲置时长未再失败的条目才淘汰，
+			// 保证锁定期间（即使超过 idleTTL）不会被提前清除
+			for ip, e := range l.entries {
+				if now.After(e.lockedUntil) && now.Sub(e.lastFail) > l.idleTTL {
+					delete(l.entries, ip)
 				}
 			}
 			l.mu.Unlock()

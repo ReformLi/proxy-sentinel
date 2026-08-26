@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -228,6 +229,9 @@ CREATE INDEX IF NOT EXISTS idx_bhl_backend_time ON backend_health_logs(backend_u
 type DB struct {
 	*sql.DB
 	Dialect Dialect
+
+	lastUsedMu   sync.Mutex
+	lastUsedMark map[int64]time.Time // proxy_tokens.last_used_at 节流写入标记（见 ValidToken）
 }
 
 // Open 根据 driver 打开对应类型的数据库并执行迁移。
@@ -356,11 +360,23 @@ func (db *DB) migrate() error {
 		return err
 	}
 	// token_version：密码/角色变更时 +1，使旧 JWT 立即失效（强制重新登录）
+	hasTokenVersion, err := db.columnExists("users", "token_version")
+	if err != nil {
+		return err
+	}
 	if err := db.addColumnIfMissing("users", "token_version", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if !hasTokenVersion {
+		// 旧库首次加列：将存量用户版本 +1（须在加列之后执行），
+		// 升级前签发的旧 JWT（无 token_version，解析为 0）随之全部失效，强制全员重新登录；
+		// 避免旧版令牌（无 role 字段）在升级后继续以回退角色访问
+		if _, err := db.DB.Exec(`UPDATE users SET token_version=token_version+1`); err != nil {
+			return err
+		}
+	}
 	// request_id 索引须在补列之后创建
-	_, err := db.DB.Exec(db.rebind("CREATE INDEX IF NOT EXISTS idx_request_id ON proxy_logs(request_id)"))
+	_, err = db.DB.Exec(db.rebind("CREATE INDEX IF NOT EXISTS idx_request_id ON proxy_logs(request_id)"))
 	return err
 }
 

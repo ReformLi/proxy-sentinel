@@ -50,7 +50,8 @@ func maskJSON(s string) string {
 	return s
 }
 
-// maskJSONStringField 将 JSON 中 "key":"value" 的 value 脱敏（不处理转义边界情况）
+// maskJSONStringField 将 JSON 中 "key":"value" 或 "key":["v1","v2"] 的值脱敏。
+// 字符串值扫描到闭合引号，正确跳过 \" 与 \\ 转义序列（否则值内含转义引号会脱敏错位）
 func maskJSONStringField(body, key string) string {
 	needle := "\"" + key + "\""
 	lower := strings.ToLower(body)
@@ -73,19 +74,45 @@ func maskJSONStringField(body, key string) string {
 		for i < len(body) && (body[i] == ' ' || body[i] == '\t') {
 			i++
 		}
-		if i >= len(body) || body[i] != '"' {
+		if i >= len(body) {
+			return body
+		}
+		var masked string
+		var next int // 值结束位置（闭合引号或数组右括号之后）
+		switch body[i] {
+		case '"':
+			// 字符串值：逐字符扫描闭合引号，跳过转义序列
+			j := i + 1
+			for j < len(body) {
+				if body[j] == '\\' {
+					j += 2 // 跳过转义字符（\" \\ 等）
+					continue
+				}
+				if body[j] == '"' {
+					break
+				}
+				j++
+			}
+			if j >= len(body) {
+				return body // 未闭合的 JSON，放弃脱敏
+			}
+			masked = maskValue(body[i+1 : j])
+			next = j + 1
+		case '[':
+			// 数组值：整体替换为 "***"（如 "tokens":["a","b"]）
+			end := strings.IndexByte(body[i:], ']')
+			if end < 0 {
+				return body // 未闭合的数组，放弃脱敏
+			}
+			masked = "***"
+			next = i + end + 1
+		default:
+			// 数字/布尔等其他类型：跳过（敏感字段极少为非字符串）
 			idx = keyEnd
 			continue
 		}
-		// 查找闭合引号
-		closeQuote := strings.IndexByte(body[i+1:], '"')
-		if closeQuote < 0 {
-			return body
-		}
-		valContent := body[i+1 : i+1+closeQuote]
-		masked := maskValue(valContent)
-		body = body[:i+1] + masked + body[i+1+closeQuote:]
+		body = body[:i] + "\"" + masked + "\"" + body[next:]
 		lower = strings.ToLower(body)
-		idx = i + 1 + len(masked) + 1
+		idx = i + len(masked) + 2
 	}
 }
