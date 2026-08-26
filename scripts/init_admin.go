@@ -43,7 +43,7 @@ func main() {
 		log.Fatal("必须提供用户名与密码（参数或配置）")
 	}
 
-	db, err := storage.Open(dbPath)
+	db, err := storage.Open("sqlite", dbPath)
 	if err != nil {
 		log.Fatalf("打开数据库失败: %v", err)
 	}

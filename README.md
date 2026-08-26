@@ -48,7 +48,7 @@
 - 完整记录：方法、路径、Headers、请求/响应体、状态码、耗时、客户端 IP/UA/Referer、命中的后端、链路 ID
 - 异步批量落盘（满 100 条或每 5s 单事务提交），不阻塞请求响应
 - **队列容量上限**（`queue_capacity` 默认 10000，0=不限制）：DB 写入慢导致队列堆积时丢弃最旧日志并输出降级告警，防止 OOM
-- **三表独立保留期**：`retention_days`（proxy_logs，默认 30）、`health_retention_days`（backend_health_logs，默认 14）、`audit_retention_days`（audit_logs，默认 180）；0 = 不自动清理；配置管理页面「数据维护」卡片可查看条数/大小并手动按天数清理（二次确认 + 原生 confirm 防误删，清理操作自身记审计）
+- **三表独立保留期**：`retention_days`（proxy_logs，默认 30）、`health_retention_days`（backend_health_logs，默认 14）、`audit_retention_days`（audit_logs，默认 180）；0 = 不自动清理；配置管理页面「数据维护」卡片可查看条数/大小并手动按天数清理（二次确认 + 原生 confirm 防误删，清理操作自身记审计）；清理后自动执行空间回收（SQLite `VACUUM` / MySQL `OPTIMIZE TABLE` / PostgreSQL `VACUUM ANALYZE`）
 - **审计日志可浏览**：独立「审计日志」页按用户 / 操作关键词 / IP / 时间段筛选，分页、详情、CSV 导出
 - 敏感字段自动脱敏（`Authorization`、`Cookie`、`Password` 等）
 - 采样率可配置（高并发下降采样）、保留天数自动清理（默认 30 天）
@@ -146,7 +146,10 @@ balancer:
   strategy: round_robin        # round_robin | random | weighted
 
 database:
-  path: "./data/sentinel.db"   # SQLite 数据库文件路径
+  driver: "sqlite"              # sqlite | mysql | postgres
+  path: "./data/sentinel.db"   # SQLite 文件路径（driver=sqlite 时使用）
+  # dsn: "user:pass@tcp(127.0.0.1:3306)/sentinel?parseTime=true"  # MySQL（driver=mysql 时使用）
+  # dsn: "host=127.0.0.1 port=5432 user=sentinel password=pass dbname=sentinel sslmode=disable"  # PostgreSQL（driver=postgres 时使用）
 
 proxy:
   timeout_seconds: 30          # 连接/读取超时
@@ -237,7 +240,7 @@ proxy-sentinel/
 │   │   ├── db.go               # 异步批量写入 + SSE 广播
 │   │   └── models.go           # 数据模型 + 脱敏
 │   ├── stats/                  # 实时/趋势/流向统计服务
-│   ├── storage/                # SQLite（建表、日志、认证、设置、统计、健康探测记录查询）
+│   ├── storage/                # 多数据库（SQLite/MySQL/PG，方言自动适配 + 占位符 rebind）
 │   ├── api/                    # HTTP 路由与 handler
 │   └── config/                 # 配置加载（yaml + dotenv + 环境变量）
 ├── web/
@@ -309,7 +312,8 @@ scp sentinel root@your-server:/usr/local/bin/
 - [x] 路径重写规则（前缀替换、剥离前缀、限定后端）
 - [x] 后端健康监控（探测落库、RTT 趋势、可用率、延迟告警联动）
 - [x] Token 过期时间与状态徽标（可选过期、作废标记、强制轮换）
-- [x] 数据持久化治理：三表独立保留期 + 页面「数据维护」手动清理
+- [x] 数据持久化治理：三表独立保留期 + 页面「数据维护」手动清理 + 空间回收（VACUUM/OPTIMIZE/VACUUM ANALYZE）
+- [x] 多数据库支持（SQLite / MySQL / PostgreSQL，方言自动适配）
 - [x] 审计日志浏览（筛选、分页、详情、导出 CSV）
 - [ ] 单机压测 QPS ≥ 2000、内存 < 300MB（待实测）
 

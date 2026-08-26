@@ -142,5 +142,8 @@ func (s *Server) postMaintenancePurge(w http.ResponseWriter, r *http.Request) {
 			ipFromRequest(r))
 	}
 
+	// 清理后回收空间（SQLite: VACUUM / MySQL: OPTIMIZE TABLE / PostgreSQL: VACUUM ANALYZE）
+	_ = s.db.Vacuum(ctx)
+
 	writeJSON(w, http.StatusOK, purgeResult{Deleted: deleted})
 }

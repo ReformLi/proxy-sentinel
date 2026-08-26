@@ -52,8 +52,7 @@ func (db *DB) GetSetting(ctx context.Context, key string) (string, bool, error) 
 
 // SetSetting 写入（UPSERT）一项设置
 func (db *DB) SetSetting(ctx context.Context, key, value string) error {
-	_, err := db.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	_, err := db.ExecContext(ctx, db.upsertSettingsSQL(), key, value)
 	return err
 }
 

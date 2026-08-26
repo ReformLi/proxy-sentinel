@@ -57,12 +57,23 @@ func main() {
 	}
 
 	// 2. 打开数据库
-	absDBPath, err := absPath(cfg.Database.Path)
-	if err != nil {
-		log.Fatalf("解析数据库路径失败: %v", err)
+	driver := cfg.Database.Driver
+	if driver == "" {
+		driver = "sqlite"
 	}
-	log.Printf("数据库文件路径: %s", absDBPath)
-	db, err := storage.Open(cfg.Database.Path)
+	dsn := cfg.Database.DSN
+	if dsn == "" {
+		// SQLite 默认走文件路径
+		absDBPath, err := absPath(cfg.Database.Path)
+		if err != nil {
+			log.Fatalf("解析数据库路径失败: %v", err)
+		}
+		log.Printf("数据库: %s (%s)", absDBPath, driver)
+		dsn = absDBPath
+	} else {
+		log.Printf("数据库: %s (DSN 模式)", driver)
+	}
+	db, err := storage.Open(driver, dsn)
 	if err != nil {
 		log.Fatalf("初始化数据库失败: %v", err)
 	}
@@ -277,6 +288,10 @@ func startRetention(db *storage.DB, logDays, healthDays, auditDays int) func() {
 					} else if an > 0 {
 						log.Printf("已清理 %d 条过期 audit_logs（>%d 天）", an, auditDays)
 					}
+				}
+				// 清理后回收空间
+				if err := db.Vacuum(context.Background()); err != nil {
+					log.Printf("VACUUM 失败: %v", err)
 				}
 			case <-done:
 				ticker.Stop()

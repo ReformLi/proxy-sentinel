@@ -41,7 +41,7 @@ func (db *DB) GetHealthSeries(ctx context.Context, from, to time.Time, bucketSec
 	if bucketSeconds < 1 {
 		bucketSeconds = 60
 	}
-	q := `SELECT backend_url, ` + sqliteEpochExpr("checked_at") + ` / ? * ? AS bucket,
+	q := `SELECT backend_url, ` + db.epochExpr("checked_at") + ` / ? * ? AS bucket,
 			MIN(healthy) AS min_h, AVG(latency_ms) AS avg_l, COUNT(*) AS probes
 		FROM backend_health_logs WHERE checked_at >= ? AND checked_at <= ?
 		GROUP BY backend_url, bucket ORDER BY backend_url, bucket`
@@ -95,7 +95,7 @@ func (db *DB) GetBackendTraffic(ctx context.Context, from, to time.Time, bucketS
 	if bucketSeconds < 1 {
 		bucketSeconds = 60
 	}
-	q := `SELECT backend_url, ` + sqliteEpochExpr("created_at") + ` / ? * ? AS bucket,
+	q := `SELECT backend_url, ` + db.epochExpr("created_at") + ` / ? * ? AS bucket,
 			COUNT(*) AS cnt,
 			SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS err,
 			COALESCE(AVG(duration), 0) AS avg_d

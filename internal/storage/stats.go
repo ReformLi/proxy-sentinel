@@ -89,7 +89,7 @@ func (db *DB) GetTrend(ctx context.Context, from, to time.Time, bucketSeconds in
 	if bucketSeconds < 1 {
 		bucketSeconds = 60
 	}
-	epochExpr := sqliteEpochExpr("created_at")
+	epochExpr := db.epochExpr("created_at")
 	q := `SELECT ` +
 		epochExpr + ` / ? * ? AS bucket, ` +
 		`COUNT(*) AS cnt, ` +

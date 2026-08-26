@@ -33,7 +33,9 @@ type BalancerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Path string `yaml:"path"`
+	Driver string `yaml:"driver"` // sqlite | mysql | postgres（默认 sqlite）
+	Path   string `yaml:"path"`   // SQLite 文件路径
+	DSN    string `yaml:"dsn"`    // MySQL/PostgreSQL 连接字符串（driver 非 sqlite 时使用）
 }
 
 type ProxyConfig struct {
@@ -197,7 +199,7 @@ func defaultConfig() *Config {
 	return &Config{
 		Server:   ServerConfig{Port: "8080"},
 		Balancer: BalancerConfig{Strategy: "round_robin"},
-		Database: DatabaseConfig{Path: "./data/sentinel.db"},
+		Database: DatabaseConfig{Driver: "sqlite", Path: "./data/sentinel.db"},
 		Proxy: ProxyConfig{
 			TimeoutSeconds:        30,
 			MaxBodyBytes:          10 * 1024 * 1024,  // 10MB：超此值走流式透传（不读进内存）
@@ -239,6 +241,12 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("DATABASE_PATH"); v != "" {
 		cfg.Database.Path = v
+	}
+	if v := os.Getenv("DATABASE_DRIVER"); v != "" {
+		cfg.Database.Driver = v
+	}
+	if v := os.Getenv("DATABASE_DSN"); v != "" {
+		cfg.Database.DSN = v
 	}
 	if v := os.Getenv("PROXY_TIMEOUT_SECONDS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
