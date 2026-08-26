@@ -120,7 +120,7 @@ export default function Users() {
   const isAdmin = currentRole !== 'viewer'
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
