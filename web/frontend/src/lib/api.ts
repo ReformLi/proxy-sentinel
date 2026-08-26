@@ -298,10 +298,12 @@ export interface BackendMonitorResp {
 export interface UserInfo {
   id: number
   username: string
+  role: string
   created_at: string
 }
 
 export interface UserListData {
   users: UserInfo[] | null
   current_user: string
+  current_role: string
 }

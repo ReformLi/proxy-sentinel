@@ -150,32 +150,33 @@ func (s *Server) Router() http.Handler {
 
 	// 配置管理（写操作审计）
 	mux.Handle("GET /api/settings", webJSON(http.HandlerFunc(s.getSettings)))
-	mux.Handle("PUT /api/settings/backends", webJSON(http.HandlerFunc(s.updateBackends)))
+	mux.Handle("PUT /api/settings/backends", webJSON(auth.AdminOnly(http.HandlerFunc(s.updateBackends))))
 
 	// Token 管理（写操作审计）
 	mux.Handle("GET /api/tokens", webJSON(http.HandlerFunc(s.listTokens)))
-	mux.Handle("POST /api/tokens", webJSON(http.HandlerFunc(s.createToken)))
-	mux.Handle("PUT /api/tokens/{id}", webJSON(http.HandlerFunc(s.updateToken)))
-	mux.Handle("DELETE /api/tokens/{id}", webJSON(http.HandlerFunc(s.deleteToken)))
+	mux.Handle("POST /api/tokens", webJSON(auth.AdminOnly(http.HandlerFunc(s.createToken))))
+	mux.Handle("PUT /api/tokens/{id}", webJSON(auth.AdminOnly(http.HandlerFunc(s.updateToken))))
+	mux.Handle("DELETE /api/tokens/{id}", webJSON(auth.AdminOnly(http.HandlerFunc(s.deleteToken))))
 
 	// 用户管理（写操作审计）
 	mux.Handle("GET /api/users", webJSON(http.HandlerFunc(s.listUsers)))
-	mux.Handle("POST /api/users", webJSON(http.HandlerFunc(s.createUser)))
-	mux.Handle("DELETE /api/users/{id}", webJSON(http.HandlerFunc(s.deleteUser)))
-	mux.Handle("PUT /api/users/{id}/password", webJSON(http.HandlerFunc(s.resetPassword)))
+	mux.Handle("POST /api/users", webJSON(auth.AdminOnly(http.HandlerFunc(s.createUser))))
+	mux.Handle("DELETE /api/users/{id}", webJSON(auth.AdminOnly(http.HandlerFunc(s.deleteUser))))
+	mux.Handle("PUT /api/users/{id}/password", webJSON(auth.AdminOnly(http.HandlerFunc(s.resetPassword))))
+	mux.Handle("PUT /api/users/{id}/role", webJSON(auth.AdminOnly(http.HandlerFunc(s.updateRole))))
 
 	// 告警通知（规则热更新 + 连通性测试）
 	mux.Handle("GET /api/alert/config", webJSON(http.HandlerFunc(s.getAlertConfig)))
-	mux.Handle("PUT /api/alert/config", webJSON(http.HandlerFunc(s.updateAlertConfig)))
-	mux.Handle("POST /api/alert/test", webJSON(http.HandlerFunc(s.testAlert)))
+	mux.Handle("PUT /api/alert/config", webJSON(auth.AdminOnly(http.HandlerFunc(s.updateAlertConfig))))
+	mux.Handle("POST /api/alert/test", webJSON(auth.AdminOnly(http.HandlerFunc(s.testAlert))))
 
 	// IP 黑白名单（保存即热生效）
 	mux.Handle("GET /api/ip-acl", webJSON(http.HandlerFunc(s.getIPACL)))
-	mux.Handle("PUT /api/ip-acl", webJSON(http.HandlerFunc(s.updateIPACL)))
+	mux.Handle("PUT /api/ip-acl", webJSON(auth.AdminOnly(http.HandlerFunc(s.updateIPACL))))
 
 	// 数据维护（统计 + 手动清理）
 	mux.Handle("GET /api/maintenance/stats", webJSON(http.HandlerFunc(s.getMaintenanceStats)))
-	mux.Handle("POST /api/maintenance/purge", webJSON(http.HandlerFunc(s.postMaintenancePurge)))
+	mux.Handle("POST /api/maintenance/purge", webJSON(auth.AdminOnly(http.HandlerFunc(s.postMaintenancePurge))))
 
 	// 反向代理路由（IP 黑白名单 → Bearer Token 认证 → 按 Token 限流）
 	mux.Handle("/proxy/", s.ipACLMiddleware(s.proxyAuth.Middleware(s.rateLimitMiddleware(s.proxyH))))

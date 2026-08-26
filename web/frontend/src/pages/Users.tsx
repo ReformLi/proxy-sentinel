@@ -17,6 +17,7 @@ export default function Users() {
   const [showCreate, setShowCreate] = useState(false)
   const [newUsername, setNewUsername] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [newRole, setNewRole] = useState('viewer')
 
   // 重置密码
   const [resetTarget, setResetTarget] = useState<{ id: number; username: string } | null>(null)
@@ -53,10 +54,11 @@ export default function Users() {
     setBusy(true)
     setMsg('')
     try {
-      await api.post('/api/users', { username: newUsername.trim(), password: newPassword })
+      await api.post('/api/users', { username: newUsername.trim(), password: newPassword, role: newRole })
       setShowCreate(false)
       setNewUsername('')
       setNewPassword('')
+      setNewRole('viewer')
       await load()
       setMsg('用户创建成功')
     } catch (e: any) {
@@ -107,9 +109,11 @@ export default function Users() {
 
   const users = data?.users ?? []
   const currentUser = data?.current_user ?? ''
+  const currentRole = data?.current_role ?? 'admin'
+  const isAdmin = currentRole !== 'viewer'
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-6">
+    <div className="space-y-6 p-6">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
@@ -124,10 +128,12 @@ export default function Users() {
               <RefreshCw className="h-4 w-4" />
               刷新
             </Button>
-            <Button size="sm" onClick={() => setShowCreate(true)}>
-              <Plus className="h-4 w-4" />
-              新建用户
-            </Button>
+            {isAdmin && (
+              <Button size="sm" onClick={() => setShowCreate(true)}>
+                <Plus className="h-4 w-4" />
+                新建用户
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -144,13 +150,14 @@ export default function Users() {
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="pb-2 pr-4 font-medium">ID</th>
                   <th className="pb-2 pr-4 font-medium">用户名</th>
+                  <th className="pb-2 pr-4 font-medium">角色</th>
                   <th className="pb-2 pr-4 font-medium">创建时间</th>
                   <th className="pb-2 pr-4 font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {users.length === 0 && !busy && (
-                  <tr><td colSpan={4} className="py-4 text-center text-muted-foreground">暂无用户数据</td></tr>
+                  <tr><td colSpan={5} className="py-4 text-center text-muted-foreground">暂无用户数据</td></tr>
                 )}
                 {users.map(u => (
                   <tr key={u.id} className="border-b last:border-0">
@@ -161,29 +168,34 @@ export default function Users() {
                         <Badge variant="secondary" className="ml-2">当前登录</Badge>
                       )}
                     </td>
+                    <td className="py-3 pr-4">
+                      <Badge variant={u.role === 'admin' ? 'default' : 'secondary'}>{u.role}</Badge>
+                    </td>
                     <td className="py-3 pr-4 text-muted-foreground">{fmtTime(u.created_at)}</td>
                     <td className="py-3 pr-4">
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => { setResetTarget({ id: u.id, username: u.username }); setResetPassword('') }}
-                        >
-                          <Lock className="h-3.5 w-3.5" />
-                          重置密码
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive hover:text-destructive"
-                          disabled={u.username === currentUser}
+                      {isAdmin && (
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => { setResetTarget({ id: u.id, username: u.username }); setResetPassword('') }}
+                          >
+                            <Lock className="h-3.5 w-3.5" />
+                            重置密码
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-destructive hover:text-destructive"
+                            disabled={u.username === currentUser}
                           title={u.username === currentUser ? '不能删除自己' : ''}
                           onClick={() => handleDelete(u.id, u.username)}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                           删除
                         </Button>
-                      </div>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -214,6 +226,17 @@ export default function Users() {
               onChange={e => setNewPassword(e.target.value)}
               placeholder="至少 6 位"
             />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-muted-foreground">角色</label>
+            <select
+              className="w-full rounded border bg-background px-3 py-2 text-sm"
+              value={newRole}
+              onChange={e => setNewRole(e.target.value)}
+            >
+              <option value="viewer">viewer（只读）</option>
+              <option value="admin">admin（完全控制）</option>
+            </select>
           </div>
           {msg && <div className="text-sm text-destructive">{msg}</div>}
           <div className="flex justify-end gap-2">

@@ -20,15 +20,18 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 		users = []storage.UserInfo{}
 	}
 	currentUser := auth.UsernameFromContext(r.Context())
+	currentRole := auth.RoleFromContext(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{
-		"users":         users,
+		"users":        users,
 		"current_user":  currentUser,
+		"current_role": currentRole,
 	})
 }
 
 type createUserRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	Role     string `json:"role"` // admin | viewer
 }
 
 // createUser POST /api/users —— 新建用户
@@ -51,6 +54,10 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "密码长度至少 6 位")
 		return
 	}
+	role := req.Role
+	if role != "admin" && role != "viewer" {
+		role = "viewer" // 未知值默认 viewer，安全优先
+	}
 
 	exists, err := s.db.UserExists(r.Context(), username)
 	if err != nil {
@@ -67,13 +74,13 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "密码加密失败")
 		return
 	}
-	if err := s.db.CreateUser(r.Context(), username, hash); err != nil {
+	if err := s.db.CreateUser(r.Context(), username, hash, role); err != nil {
 		writeError(w, http.StatusInternalServerError, "创建用户失败: "+err.Error())
 		return
 	}
 
 	auth.Audit(auditCtx(r), s.db, auth.UsernameFromContext(r.Context()),
-		"创建用户: "+username, ipFromRequest(r))
+		"创建用户: "+username+" ("+role+")", ipFromRequest(r))
 	writeJSON(w, http.StatusCreated, map[string]any{"message": "用户已创建"})
 }
 
@@ -164,4 +171,46 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 	auth.Audit(auditCtx(r), s.db, auth.UsernameFromContext(r.Context()),
 		"重置用户密码: "+user.Username, ipFromRequest(r))
 	writeJSON(w, http.StatusOK, map[string]any{"message": "密码已重置"})
+}
+
+type updateRoleRequest struct {
+	Role string `json:"role"` // admin | viewer
+}
+
+// updateRole PUT /api/users/{id}/role —— 修改用户角色
+func (s *Server) updateRole(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "无效的用户 ID")
+		return
+	}
+	var req updateRoleRequest
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	if req.Role != "admin" && req.Role != "viewer" {
+		writeError(w, http.StatusBadRequest, "角色必须是 admin 或 viewer")
+		return
+	}
+	user, err := s.db.GetUserByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "查询用户失败: "+err.Error())
+		return
+	}
+	if user == nil {
+		writeError(w, http.StatusNotFound, "用户不存在")
+		return
+	}
+	if user.Username == auth.UsernameFromContext(r.Context()) && req.Role != user.Role {
+		writeError(w, http.StatusBadRequest, "不能修改自己的角色")
+		return
+	}
+	if err := s.db.UpdateUserRole(r.Context(), id, req.Role); err != nil {
+		writeError(w, http.StatusInternalServerError, "更新角色失败: "+err.Error())
+		return
+	}
+	auth.Audit(auditCtx(r), s.db, auth.UsernameFromContext(r.Context()),
+		"修改用户角色: "+user.Username+" → "+req.Role, ipFromRequest(r))
+	writeJSON(w, http.StatusOK, map[string]any{"message": "角色已更新"})
 }

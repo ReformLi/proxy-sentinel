@@ -226,5 +226,9 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	if username == "" {
 		username = s.adminUser
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"username": username})
+	role := auth.RoleFromContext(r.Context())
+	if role == "" {
+		role = "admin"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"username": username, "role": role})
 }

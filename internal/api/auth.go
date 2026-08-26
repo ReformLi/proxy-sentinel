@@ -152,7 +152,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 
 	// 登录成功
 	s.loginLimit.success(ip)
-	token, expiresAt, err := s.jwtMgr.Generate(user.Username)
+	token, expiresAt, err := s.jwtMgr.Generate(user.Username, user.Role)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "生成令牌失败")
 		return

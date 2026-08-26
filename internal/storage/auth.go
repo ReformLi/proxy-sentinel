@@ -14,6 +14,7 @@ type User struct {
 	ID           int64
 	Username     string
 	PasswordHash string
+	Role         string
 	CreatedAt    time.Time
 }
 
@@ -70,9 +71,9 @@ func (db *DB) MigrateLegacyTokens(ctx context.Context) error {
 
 // GetUserByUsername 按用户名查询管理员
 func (db *DB) GetUserByUsername(ctx context.Context, username string) (*User, error) {
-	row := db.QueryRowContext(ctx, `SELECT id, username, password_hash, created_at FROM users WHERE username=?`, username)
+	row := db.QueryRowContext(ctx, `SELECT id, username, password_hash, role, created_at FROM users WHERE username=?`, username)
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -86,12 +87,13 @@ func (db *DB) GetUserByUsername(ctx context.Context, username string) (*User, er
 type UserInfo struct {
 	ID        int64     `json:"id"`
 	Username  string    `json:"username"`
+	Role      string    `json:"role"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 // ListUsers 列出全部用户（按 ID 正序，不含密码哈希）
 func (db *DB) ListUsers(ctx context.Context) ([]UserInfo, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id, username, created_at FROM users ORDER BY id`)
+	rows, err := db.QueryContext(ctx, `SELECT id, username, role, created_at FROM users ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +101,7 @@ func (db *DB) ListUsers(ctx context.Context) ([]UserInfo, error) {
 	var out []UserInfo
 	for rows.Next() {
 		var u UserInfo
-		if err := rows.Scan(&u.ID, &u.Username, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -110,8 +112,8 @@ func (db *DB) ListUsers(ctx context.Context) ([]UserInfo, error) {
 // GetUserByID 按 ID 查询用户（不含密码哈希）
 func (db *DB) GetUserByID(ctx context.Context, id int64) (*UserInfo, error) {
 	var u UserInfo
-	err := db.QueryRowContext(ctx, `SELECT id, username, created_at FROM users WHERE id=?`, id).
-		Scan(&u.ID, &u.Username, &u.CreatedAt)
+	err := db.QueryRowContext(ctx, `SELECT id, username, role, created_at FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.Username, &u.Role, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -131,9 +133,18 @@ func (db *DB) DeleteUser(ctx context.Context, id int64) (bool, error) {
 	return n > 0, err
 }
 
-// CreateUser 创建管理员账号
-func (db *DB) CreateUser(ctx context.Context, username, passwordHash string) error {
-	_, err := db.ExecContext(ctx, `INSERT INTO users (username, password_hash) VALUES (?, ?)`, username, passwordHash)
+// CreateUser 创建用户账号，role 为 "admin" 或 "viewer"
+func (db *DB) CreateUser(ctx context.Context, username, passwordHash, role string) error {
+	if role == "" {
+		role = "admin"
+	}
+	_, err := db.ExecContext(ctx, `INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)`, username, passwordHash, role)
+	return err
+}
+
+// UpdateUserRole 更新用户角色
+func (db *DB) UpdateUserRole(ctx context.Context, id int64, role string) error {
+	_, err := db.ExecContext(ctx, `UPDATE users SET role=? WHERE id=?`, role, id)
 	return err
 }
 

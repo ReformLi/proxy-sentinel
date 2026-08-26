@@ -11,6 +11,7 @@ import (
 // Claims JWT 载荷
 type Claims struct {
 	Username string `json:"username"`
+	Role     string `json:"role"` // admin | viewer
 	jwt.RegisteredClaims
 }
 
@@ -34,11 +35,12 @@ func NewJWTManager(secret string, expiry time.Duration, secure bool) *JWTManager
 func (m *JWTManager) Secure() bool { return m.secure }
 
 // Generate 签发 JWT
-func (m *JWTManager) Generate(username string) (string, time.Time, error) {
+func (m *JWTManager) Generate(username, role string) (string, time.Time, error) {
 	now := time.Now()
 	expiresAt := now.Add(m.expiry)
 	claims := Claims{
 		Username: username,
+		Role:     role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),

@@ -6,24 +6,25 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 const navItems = [
-  { to: '/dashboard', label: '仪表盘', icon: LayoutDashboard },
-  { to: '/logs', label: '日志查询', icon: ScrollText },
-  { to: '/audit-logs', label: '审计日志', icon: FileSearch },
-  { to: '/flow', label: '数据流向', icon: GitBranch },
-  { to: '/backends', label: '后端监控', icon: HeartPulse },
-  { to: '/tokens', label: 'Token 管理', icon: KeyRound },
-  { to: '/users', label: '用户管理', icon: Users },
-  { to: '/settings', label: '配置管理', icon: Settings },
+  { to: '/dashboard', label: '仪表盘', icon: LayoutDashboard, adminOnly: false },
+  { to: '/logs', label: '日志查询', icon: ScrollText, adminOnly: false },
+  { to: '/audit-logs', label: '审计日志', icon: FileSearch, adminOnly: false },
+  { to: '/flow', label: '数据流向', icon: GitBranch, adminOnly: false },
+  { to: '/backends', label: '后端监控', icon: HeartPulse, adminOnly: false },
+  { to: '/tokens', label: 'Token 管理', icon: KeyRound, adminOnly: true },
+  { to: '/users', label: '用户管理', icon: Users, adminOnly: true },
+  { to: '/settings', label: '配置管理', icon: Settings, adminOnly: true },
 ]
 
 export function Layout() {
   const navigate = useNavigate()
   const [username, setUsername] = useState('')
+  const [role, setRole] = useState('')
 
   useEffect(() => {
     api
-      .get<{ username: string }>('/api/auth/me')
-      .then((d) => setUsername(d.username))
+      .get<{ username: string; role: string }>('/api/auth/me')
+      .then((d) => { setUsername(d.username); setRole(d.role) })
       .catch(() => {})
   }, [])
 
@@ -45,7 +46,7 @@ export function Layout() {
           <span className="text-sm font-bold">Proxy Sentinel</span>
         </div>
         <nav className="flex-1 space-y-1 p-3">
-          {navItems.map(({ to, label, icon: Icon }) => (
+          {navItems.filter(n => !n.adminOnly || role === 'admin').map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}

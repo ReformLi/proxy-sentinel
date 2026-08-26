@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
+  role TEXT DEFAULT 'admin',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -111,6 +112,7 @@ CREATE TABLE IF NOT EXISTS users (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   username VARCHAR(64) UNIQUE NOT NULL,
   password_hash VARCHAR(128) NOT NULL,
+  role VARCHAR(16) DEFAULT 'admin',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -179,6 +181,7 @@ CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
   username VARCHAR(64) UNIQUE NOT NULL,
   password_hash VARCHAR(128) NOT NULL,
+  role VARCHAR(16) DEFAULT 'admin',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -344,6 +347,9 @@ func (db *DB) migrate() error {
 		return err
 	}
 	if err := db.addColumnIfMissing("proxy_logs", "request_id", "TEXT"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfMissing("users", "role", "TEXT DEFAULT 'admin'"); err != nil {
 		return err
 	}
 	// request_id 索引须在补列之后创建

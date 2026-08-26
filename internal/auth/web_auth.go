@@ -12,6 +12,7 @@ import (
 const CookieName = "sentinel_token"
 
 type userCtxKey struct{}
+type roleCtxKey struct{}
 
 // WebAuthMiddleware 校验可视化页面与 API 的 JWT Cookie
 type WebAuthMiddleware struct {
@@ -64,7 +65,13 @@ func (m *WebAuthMiddleware) Middleware(acceptJSON bool) func(http.Handler) http.
 				m.unauthorized(w, r, acceptJSON)
 				return
 			}
+			// 老令牌无 role 字段，向后兼容视为 admin
+			role := claims.Role
+			if role == "" {
+				role = "admin"
+			}
 			ctx := context.WithValue(r.Context(), userCtxKey{}, claims.Username)
+			ctx = context.WithValue(ctx, roleCtxKey{}, role)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -86,6 +93,27 @@ func UsernameFromContext(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// RoleFromContext 从上下文取出用户角色（admin / viewer）
+func RoleFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(roleCtxKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// AdminOnly 仅允许 admin 角色访问的中间件；viewer 返回 403
+func AdminOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if RoleFromContext(r.Context()) != "admin" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden: admin only"}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Audit 记录登录审计事件

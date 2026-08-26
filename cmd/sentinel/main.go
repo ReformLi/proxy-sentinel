@@ -211,7 +211,7 @@ func bootstrap(db *storage.DB, cfg *config.Config) error {
 		if err != nil {
 			return fmt.Errorf("加密密码失败: %w", err)
 		}
-		if err := db.CreateUser(ctx, cfg.Auth.AdminUsername, hash); err != nil {
+		if err := db.CreateUser(ctx, cfg.Auth.AdminUsername, hash, "admin"); err != nil {
 			return fmt.Errorf("创建管理员失败: %w", err)
 		}
 		log.Printf("已创建管理员账号: %s", cfg.Auth.AdminUsername)

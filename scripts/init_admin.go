@@ -65,7 +65,7 @@ func main() {
 			log.Fatalf("重置用户失败: %v", err)
 		}
 	}
-	if err := db.CreateUser(ctx, username, hash); err != nil {
+	if err := db.CreateUser(ctx, username, hash, "admin"); err != nil {
 		log.Fatalf("创建用户失败: %v", err)
 	}
 	fmt.Fprintf(os.Stdout, "管理员 '%s' 创建/重置成功\n", username)
