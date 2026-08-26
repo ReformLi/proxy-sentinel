@@ -123,6 +123,7 @@ func (s *Server) Router() http.Handler {
 	spa := http.HandlerFunc(spaIndex)
 	mux.Handle("GET /dashboard", webPage(spa))
 	mux.Handle("GET /logs", webPage(spa))
+	mux.Handle("GET /audit-logs", webPage(spa))
 	mux.Handle("GET /flow", webPage(spa))
 	mux.Handle("GET /backends", webPage(spa))
 	mux.Handle("GET /tokens", webPage(spa))
@@ -140,6 +141,11 @@ func (s *Server) Router() http.Handler {
 	mux.Handle("GET /api/logs/stream", webJSON(http.HandlerFunc(s.streamLogs)))
 	mux.Handle("GET /api/logs/export", webJSON(http.HandlerFunc(s.exportCSV)))
 	mux.Handle("GET /api/logs/{id}", webJSON(http.HandlerFunc(s.getLog)))
+
+	// 审计日志（只读列表，管理员可读）
+	mux.Handle("GET /api/audit-logs", webJSON(http.HandlerFunc(s.listAudits)))
+	mux.Handle("GET /api/audit-logs/export", webJSON(http.HandlerFunc(s.exportAuditsCSV)))
+	mux.Handle("GET /api/audit-logs/{id}", webJSON(http.HandlerFunc(s.getAudit)))
 
 	// 配置管理（写操作审计）
 	mux.Handle("GET /api/settings", webJSON(http.HandlerFunc(s.getSettings)))

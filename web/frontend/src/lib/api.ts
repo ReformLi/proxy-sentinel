@@ -123,6 +123,21 @@ export interface PagedLogs {
   data: LogRecord[] | null
 }
 
+export interface AuditRecord {
+  id: number
+  username: string
+  action: string
+  ip: string
+  created_at: string
+}
+
+export interface PagedAudits {
+  total: number
+  page: number
+  page_size: number
+  data: AuditRecord[] | null
+}
+
 export interface BackendStat {
   url: string
   healthy: boolean

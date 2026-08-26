@@ -3,6 +3,7 @@ import { Layout } from '@/components/Layout'
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import Logs from '@/pages/Logs'
+import AuditLogs from '@/pages/AuditLogs'
 import Flow from '@/pages/Flow'
 import Backends from '@/pages/Backends'
 import Tokens from '@/pages/Tokens'
@@ -15,6 +16,7 @@ export default function App() {
       <Route element={<Layout />}>
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/logs" element={<Logs />} />
+        <Route path="/audit-logs" element={<AuditLogs />} />
         <Route path="/flow" element={<Flow />} />
         <Route path="/backends" element={<Backends />} />
         <Route path="/tokens" element={<Tokens />} />
