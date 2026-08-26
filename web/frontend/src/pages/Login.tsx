@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ShieldCheck } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -48,7 +47,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-muted/40">
       <Card className="w-full max-w-sm">
         <CardHeader className="items-center text-center">
-          <ShieldCheck className="mx-auto mb-2 h-10 w-10 text-primary" />
+          <img src="/favicon.svg" alt="logo" className="mx-auto mb-2 h-12 w-12" />
           <CardTitle className="text-xl">Proxy Sentinel</CardTitle>
           <CardDescription>代理网关与日志分析平台</CardDescription>
         </CardHeader>

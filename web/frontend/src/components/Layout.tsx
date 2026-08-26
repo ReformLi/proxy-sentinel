@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, ScrollText, GitBranch, Settings, LogOut, ShieldCheck, KeyRound, HeartPulse, FileSearch } from 'lucide-react'
+import { LayoutDashboard, ScrollText, GitBranch, Settings, LogOut, KeyRound, HeartPulse, FileSearch } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -40,7 +40,7 @@ export function Layout() {
       {/* 侧边栏 */}
       <aside className="flex w-52 shrink-0 flex-col border-r bg-card">
         <div className="flex h-14 items-center gap-2 border-b px-4">
-          <ShieldCheck className="h-5 w-5 text-primary" />
+          <img src="/favicon.svg" alt="logo" className="h-6 w-6" />
           <span className="text-sm font-bold">Proxy Sentinel</span>
         </div>
         <nav className="flex-1 space-y-1 p-3">
