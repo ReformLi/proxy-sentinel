@@ -57,8 +57,15 @@
 | 维度 | 代理接口 `/proxy/*` | 可视化页面 `/api/*` |
 |:--|:--|:--|
 | 认证方式 | Bearer Token（哈希存储） | JWT（HttpOnly Cookie，24h 过期） |
-| 适用对象 | 后端服务（机器） | 管理员（浏览器） |
-| 存储 | `proxy_tokens` 表，支持多 Token | `users` 表（bcrypt） |
+| 适用对象 | 后端服务（机器） | 管理员/只读用户（浏览器） |
+| 存储 | `proxy_tokens` 表，支持多 Token | `users` 表（bcrypt + role） |
+
+### 用户管理与权限控制
+- **多用户**：独立「用户管理」页增删用户、重置密码，初始管理员从 config.yaml 自动创建
+- **两级角色**：`admin`（全部操作：改配置、管 Token、管用户、清数据）和 `viewer`（只读：看仪表盘、日志、审计日志、后端监控）
+- **权限隔离**：viewer 菜单隐藏管理入口；写操作 API 由 `AdminOnly` 中间件拦截返回 403
+- **删除即失效**：删除用户后内存缓存同步清除，被删用户下一次请求即被拒绝并踢回登录页（30s 缓存 + 主动清除双保险，不靠等 JWT 过期）
+- 所有用户管理操作（创建/删除/重置密码/角色变更）均记审计日志
 
 ### 告警通知（钉钉机器人）
 - 内置告警引擎：错误率（5xx 占比 + 最小样本量防误报）/ 后端宕机与恢复 / 后端探测延迟三类规则
@@ -79,6 +86,7 @@
 - **数据流向拓扑**：客户端 → 网关 → 后端集群；边宽=请求量、颜色=耗时（绿快红慢），点击后端节点下钻日志
 - **后端监控**：每后端卡片（健康徽标/可用率/最近延迟/流量摘要）+ 探测 RTT 折线（不健康时段红色色带）+ 真实流量与 5xx 双图
 - **Token 管理**：代理 Token 增删改、独立限流配置、可选过期时间与状态徽标（已作废/即将过期/正常）
+- **用户管理**：用户增删、重置密码、角色选择（admin/viewer），当前登录用户标记，viewer 角色隐藏写操作按钮
 - **配置管理**：后端节点增删改（权重/探测路径）、健康状态实时展示、负载策略切换、定向分流与路径重写规则编辑、IP 黑白名单、告警配置、**数据维护（三表条数/大小、保留期查看 + 手动按天数清理）**——保存立即生效且重启保留
 
 ---
@@ -201,18 +209,23 @@ log:
 | `GET` | `/api/audit-logs/:id` | 单条审计日志详情 | ✅ |
 | `GET` | `/api/audit-logs/export` | 导出审计日志 CSV | ✅ |
 | `GET` | `/api/maintenance/stats` | 数据库维护统计（三表条数/大小/保留期） | ✅ |
-| `POST` | `/api/maintenance/purge` | 手动按天数清理指定表（需 confirm=true） | ✅ |
+| `POST` | `/api/maintenance/purge` | 手动按天数清理指定表（需 confirm=true） | admin |
 | `GET` | `/api/settings` | 读取运行时配置（含定向规则/路径重写） | ✅ |
-| `PUT` | `/api/settings/backends` | 更新后端列表/策略/分流规则/重写规则（立即生效+持久化） | ✅ |
+| `PUT` | `/api/settings/backends` | 更新后端列表/策略/分流规则/重写规则（立即生效+持久化） | admin |
 | `GET` | `/api/tokens` | 代理 Token 列表（元数据） | ✅ |
-| `POST` | `/api/tokens` | 新增 Token（明文仅返回一次） | ✅ |
-| `PUT` | `/api/tokens/:id` | 重命名 / 独立限流值 | ✅ |
-| `DELETE` | `/api/tokens/:id` | 吊销 Token | ✅ |
+| `POST` | `/api/tokens` | 新增 Token（明文仅返回一次） | admin |
+| `PUT` | `/api/tokens/:id` | 重命名 / 独立限流值 | admin |
+| `DELETE` | `/api/tokens/:id` | 吊销 Token | admin |
+| `GET` | `/api/users` | 用户列表 + 当前登录用户角色 | ✅ |
+| `POST` | `/api/users` | 新建用户（用户名 + 密码 + 角色） | admin |
+| `DELETE` | `/api/users/:id` | 删除用户（禁删自己/最后一个，清除会话缓存） | admin |
+| `PUT` | `/api/users/:id/password` | 重置用户密码 | admin |
+| `PUT` | `/api/users/:id/role` | 修改用户角色（admin/viewer） | admin |
 | `GET` | `/api/alert/config` | 读取告警配置 | ✅ |
-| `PUT` | `/api/alert/config` | 更新告警规则 / Webhook | ✅ |
-| `POST` | `/api/alert/test` | 发送测试告警 | ✅ |
+| `PUT` | `/api/alert/config` | 更新告警规则 / Webhook | admin |
+| `POST` | `/api/alert/test` | 发送测试告警 | admin |
 | `GET` | `/api/ip-acl` | 读取 IP 黑白名单 | ✅ |
-| `PUT` | `/api/ip-acl` | 更新 IP 黑白名单 | ✅ |
+| `PUT` | `/api/ip-acl` | 更新 IP 黑白名单 | admin |
 | `ANY` | `/proxy/*` | 反向代理转发（IP 名单 → Bearer 认证 → 限流） | ✅ Bearer Token |
 | `GET` | `/health` | 健康检查 | ❌ |
 
@@ -287,6 +300,8 @@ scp sentinel root@your-server:/usr/local/bin/
 - Token 过期作废机制：到期标记不删除（保留审计痕迹）、不续期（强制轮换）
 - bcrypt（成本因子 10）密码哈希；登录失败比对耗时恒定，消除用户名枚举时序差
 - JWT 存于 HttpOnly + SameSite=Lax Cookie；HTTPS 环境设 `SECURE_COOKIE=true`
+- **两级角色权限**（admin/viewer）：写操作 API 由 `AdminOnly` 中间件拦截，viewer 仅可读
+- **删除用户即失效**：用户存在性校验走 30s 内存缓存，删除时主动清除缓存 → 被删用户下一次请求即被拒绝（不依赖等 JWT 过期）
 - 登录防暴力破解：IP 级限流锁定
 - 日志敏感字段脱敏、CSV 公式注入防护、请求体大小双层限制（代理层 + 日志层）
 - 全参数化 SQL（无注入）、代理头伪造防护（`trust_forwarded_headers` 默认关闭）
@@ -315,6 +330,7 @@ scp sentinel root@your-server:/usr/local/bin/
 - [x] 数据持久化治理：三表独立保留期 + 页面「数据维护」手动清理 + 空间回收（VACUUM/OPTIMIZE/VACUUM ANALYZE）
 - [x] 多数据库支持（SQLite / MySQL / PostgreSQL，方言自动适配）
 - [x] 审计日志浏览（筛选、分页、详情、导出 CSV）
+- [x] 用户管理与角色权限（admin/viewer、多用户增删、删除即失效）
 - [ ] 单机压测 QPS ≥ 2000、内存 < 300MB（待实测）
 
 ## 9. 未实现项（V1.1 计划，均为原 P2）

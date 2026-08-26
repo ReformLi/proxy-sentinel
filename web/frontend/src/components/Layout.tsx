@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 const navItems = [
   { to: '/dashboard', label: '仪表盘', icon: LayoutDashboard, adminOnly: false },
   { to: '/logs', label: '日志查询', icon: ScrollText, adminOnly: false },
-  { to: '/audit-logs', label: '审计日志', icon: FileSearch, adminOnly: false },
+  { to: '/audit-logs', label: '审计日志', icon: FileSearch, adminOnly: true },
   { to: '/flow', label: '数据流向', icon: GitBranch, adminOnly: false },
   { to: '/backends', label: '后端监控', icon: HeartPulse, adminOnly: false },
   { to: '/tokens', label: 'Token 管理', icon: KeyRound, adminOnly: true },
