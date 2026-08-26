@@ -30,5 +30,11 @@
   body {
     @apply bg-background text-foreground;
     font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+    margin: 0;
+  }
+
+  html, body, #root {
+    height: 100%;
+    overflow: hidden;
   }
 }

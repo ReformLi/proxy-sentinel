@@ -44,7 +44,7 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/40">
+    <div className="flex h-screen w-full items-center justify-center overflow-auto bg-muted/40 p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="items-center text-center">
           <img src="/favicon.svg" alt="logo" className="mx-auto mb-2 h-12 w-12" />
