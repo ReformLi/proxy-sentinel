@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -24,8 +25,15 @@ import (
 )
 
 func main() {
-	// 1. 加载配置
-	configPath := os.Getenv("CONFIG_PATH")
+	// 1. 加载配置：CLI -config/-c > 环境变量 CONFIG_PATH > 默认 config.yaml
+	var flagConfig string
+	flag.StringVar(&flagConfig, "config", "", "配置文件路径（短选项 -c 等价）")
+	flag.StringVar(&flagConfig, "c", "", "配置文件路径（等价于 --config）")
+	flag.Parse()
+	configPath := flagConfig
+	if configPath == "" {
+		configPath = os.Getenv("CONFIG_PATH")
+	}
 	if configPath == "" {
 		configPath = "config.yaml"
 	}

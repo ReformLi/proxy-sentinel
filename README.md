@@ -109,11 +109,12 @@ npm run build          # 产物输出到 web/dist（被 .gitignore 忽略，不�
 cd ../..
 go build -o sentinel ./cmd/sentinel
 
-# 3. 准备配置
-cp config.yaml config.local.yaml   # 或直接使用 config.yaml
+# 3. 准备配置（真实 *.yaml 被 gitignore，需要从示例复制）
+cp config.example.yaml config.yaml    # ⚠ 修改里面的 admin_password / jwt_secret / proxy_tokens（都标了 CHANGE_ME）
+#   或带自定义路径启动：./sentinel -c /path/to/any.yaml
 
 # 4. 启动
-./sentinel
+./sentinel           # 等价于 ./sentinel -c config.yaml
 ```
 
 启动日志示例：
@@ -125,7 +126,7 @@ cp config.yaml config.local.yaml   # 或直接使用 config.yaml
 2026/08/23 20:24:49 Proxy Sentinel 已启动，监听 :8080
 ```
 
-浏览器访问 `http://localhost:8080`，使用 `config.yaml` 中的管理员账号登录（首次启动自动创建）。
+浏览器访问 `http://localhost:8080`，使用 `config.yaml`（或你 `-c` 指定的文件）里的管理员账号登录（首次启动自动创建）。
 
 ### 调用代理接口
 
@@ -261,8 +262,13 @@ proxy-sentinel/
 │   ├── dist/                   # 前端构建产物（不入库，npm run build 生成；仅 .gitkeep 占位）
 │   └── frontend/               # React 18 + Vite + TS + Tailwind + ECharts 源码
 ├── scripts/init_admin.go       # 手动重置管理员密码（可选）
+├── scripts/memwatch.ps1        # 压测用 RSS 内存采样脚本（Win PowerShell）
+├── scripts/backend.go          # 压测用零延迟 Go mock 后端
+├── scripts/benchmark.go        # 压测客户端（Go goroutine 池，可跑 4000+ QPS）
 ├── Dockerfile
-├── config.yaml
+├── docker-compose.yml          # 部署编排：docker compose up -d 一键起（见第 6 节）
+├── config.example.yaml         # 通用配置示例（复制为 config.yaml 后使用，真实 config.yaml 不入库）
+├── bench-sentinel.example.yaml # 压测专用配置示例（复制为 bench-sentinel.yaml 后使用，详见 BENCHMARK_REPORT.md）
 └── go.mod
 ```
 
@@ -270,7 +276,24 @@ proxy-sentinel/
 
 ## 6. 部署
 
-### Docker
+### Docker Compose（推荐）
+
+```bash
+# 1. 准备配置（真实 config.yaml 不入库，从示例复制）
+cp config.example.yaml config.yaml   # 修改 admin_password / jwt_secret / proxy_tokens
+
+# 2. 启动（第一次会自动 build 镜像；敏感项通过环境变量注入可覆盖 config.yaml）
+ADMIN_PASSWORD=your-strong-password \
+JWT_SECRET=your-long-random-secret \
+docker compose up -d
+
+# 3. 查看日志
+docker compose logs -f sentinel
+```
+
+端口、挂载卷、环境变量清单见：[docker-compose.yml](docker-compose.yml)
+
+### Docker（手动）
 
 ```bash
 docker build -t proxy-sentinel .
@@ -331,7 +354,7 @@ scp sentinel root@your-server:/usr/local/bin/
 - [x] 多数据库支持（SQLite / MySQL / PostgreSQL，方言自动适配）
 - [x] 审计日志浏览（筛选、分页、详情、导出 CSV）
 - [x] 用户管理与角色权限（admin/viewer、多用户增删、删除即失效）
-- [ ] 单机压测 QPS ≥ 2000、内存 < 300MB（待实测）
+- [x] 单机压测 QPS ≥ 2000、内存 < 300MB（实测 QPS=4443，P99=56ms，RSS 峰值 59MB → [BENCHMARK_REPORT.md](BENCHMARK_REPORT.md)）
 
 ## 9. 未实现项（V1.1 计划，均为原 P2）
 

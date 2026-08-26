@@ -1,0 +1,104 @@
+# ==========================================================================
+# Proxy Sentinel · 示例配置文件
+# ==========================================================================
+# 使用方式：
+#   1) 复制本文件为 config.yaml（或任意 *.yaml 文件名）
+#   2) 修改下面的 "⚠ 请修改" 标注项（默认占位符不能直接用于生产）
+#   3) 启动：
+#        Windows: sentinel.exe -c config.yaml
+#        Linux:   ./sentinel -c config.yaml
+#
+# 环境变量优先级高于配置文件：任意字段都可以通过大写 + 下划线覆盖
+#   例：server.port -> SERVER_PORT
+#   例：auth.admin_password -> AUTH_ADMIN_PASSWORD
+# ==========================================================================
+
+server:
+  port: "8080"                  # 管理面板 & 代理网关共用监听端口
+
+# --------------------------------------------------------------------------
+# 后端目标（支持多个，按 balancer.strategy 做负载均衡）
+# --------------------------------------------------------------------------
+backends:
+  - http://127.0.0.1:8000       # ⚠ 请修改：你的业务后端地址（可多行添加多个）
+  # - http://127.0.0.1:8001
+
+balancer:
+  strategy: round_robin         # round_robin | random
+
+# --------------------------------------------------------------------------
+# 数据库（3 选 1：SQLite / MySQL / PostgreSQL）
+# --------------------------------------------------------------------------
+database:
+  driver: "sqlite"              # sqlite | mysql | postgres
+
+  # ---- SQLite （默认，driver = sqlite 时生效） ----
+  path: "./data/sentinel.db"    # 数据库文件路径（启动时不存在会自动创建）
+
+  # ---- MySQL （driver = mysql 时生效，取消注释修改） ----
+  # dsn: "user:password@tcp(127.0.0.1:3306)/sentinel?parseTime=true&charset=utf8mb4"
+
+  # ---- PostgreSQL （driver = postgres 时生效，取消注释修改） ----
+  # dsn: "host=127.0.0.1 port=5432 user=sentinel password=password dbname=sentinel sslmode=disable"
+
+# --------------------------------------------------------------------------
+# 代理网关
+# --------------------------------------------------------------------------
+proxy:
+  timeout_seconds: 30           # 连接 + 读取总超时（秒）
+  max_body_bytes: 10485760      # 10 MB：<= 此值才把 body 记进日志；超出直接流式透传（不占内存）
+  max_upload_bytes: 1073741824  # 1 GB：流式透传上限；超出返回 413；0 = 不限制
+  trust_forwarded_headers: false # 仅 Sentinel 前有可信反向代理（Nginx/Cloudflare）时才设为 true，防止 IP 伪造
+
+# --------------------------------------------------------------------------
+# 鉴权
+# --------------------------------------------------------------------------
+auth:
+  # 首次启动自动创建的可视化管理员；之后可在「用户管理」里增删用户
+  admin_username: "admin"                              # ⚠ 请修改
+  admin_password: "CHANGE_ME_ADMIN_PASSWORD_123"       # ⚠ 生产必改（长度 >= 8）
+
+  # JWT 签名密钥：泄漏后任何人可以伪造管理员身份
+  jwt_secret: "CHANGE_ME_JWT_SECRET_PLEASE_GENERATE_A_LONG_RANDOM_STRING"  # ⚠ 生产必改，建议 64 位以上随机
+
+  # 代理接口 Bearer Token 列表（首次启动写入 DB，之后在「令牌管理」里改）
+  # 调用示例：curl -H "Authorization: Bearer dev-token-change-me" http://host:8080/proxy/anything
+  proxy_tokens:
+    - "CHANGE_ME_PROXY_TOKEN_001"                      # ⚠ 请修改
+
+# --------------------------------------------------------------------------
+# 限流
+# --------------------------------------------------------------------------
+rate_limit:
+  default_rpm: 0              # 0 = 关闭；单位：次 / 分钟 / 每个 Token（例：6000 = 100 QPS / Token）
+
+# --------------------------------------------------------------------------
+# 告警通知（可选；webhook_url 留空 = 不启用）
+#   钉钉：群设置 → 智能群助手 → 添加机器人 → 自定义
+#        安全设置推荐「加签」，把 SEC 开头的密钥填到 secret 字段
+# --------------------------------------------------------------------------
+alert:
+  check_interval_seconds: 30   # 告警评估周期
+  dingtalk:
+    webhook_url: ""            # ⚠ 按需填写：https://oapi.dingtalk.com/robot/send?access_token=XXX
+    secret: ""                 # ⚠ 加签模式下必填；其他模式留空
+
+# --------------------------------------------------------------------------
+# 日志与数据保留
+# --------------------------------------------------------------------------
+log:
+  level: info                  # debug | info | warn | error
+  sample_rate: 1.0             # 1.0 = 全量落库；0.1 = 仅 10%（注意：采样会等比缩小面板上的统计数值）
+  retention_days: 30           # 代理日志 (proxy_logs) 保留天数；0 = 不自动清理
+  health_retention_days: 14    # 健康检查日志 (backend_health_logs) 保留天数；0 = 不自动清理
+  audit_retention_days: 180    # 审计日志 (audit_logs) 保留天数；0 = 不自动清理
+  mask_sensitive: true         # 日志脱敏敏感字段（Authorization/Cookie/JWT 等）
+  body_max_bytes: 65536        # 日志中请求/响应体截断上限（字节），防止大响应撑爆 DB
+  queue_capacity: 10000        # 异步写日志队列容量，满时丢弃最旧并告警；0 = 不限制
+
+# --------------------------------------------------------------------------
+# Cookie 安全（默认读环境变量 SECURE_COOKIE，等价于下面这个键）
+#   本地 HTTP：false
+#   生产 HTTPS：true（否则浏览器可能不会下发 Set-Cookie）
+# --------------------------------------------------------------------------
+# secure_cookie: false

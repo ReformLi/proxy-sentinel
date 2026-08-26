@@ -68,9 +68,21 @@ application.json
 .env.production
 
 # 但是建议提交一个 示例 配置文件，方便别人克隆后修改
-# 如果你有 config.example.yaml，请在上面加 ! 取反规则，例如：
-# !config.example.yaml
-# !settings.example.toml
+# 所有 *.example.yaml / *.example.yml / *.example.toml / *.example.json 都放行
+!*.example.yaml
+!*.example.yml
+!*.example.toml
+!*.example.json
+!config.example.yaml
+!settings.example.toml
+!bench-sentinel.example.yaml
+
+# Docker Compose 编排文件（不包含敏感值，仅定义"怎么起容器"的结构，约定应该提交）
+# 敏感配置通过环境变量 / volume 挂载注入，不要硬编码到 compose 里
+!docker-compose.yml
+!docker-compose.yaml
+!compose.yml
+!compose.yaml
 
 # ===============================
 # 3. 安全证书与密钥（极度重要）

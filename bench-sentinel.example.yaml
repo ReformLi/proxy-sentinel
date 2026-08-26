@@ -1,0 +1,61 @@
+# ==========================================================================
+# Proxy Sentinel · 压测专用示例配置（用于复现 BENCHMARK_REPORT.md 中的结果）
+# ==========================================================================
+# 用法：
+#   1) 复制本文件为 bench-sentinel.yaml（保持被 .gitignore 忽略，不要提交）
+#   2) 先启动 2 个 mock 后端：
+#        Terminal 1: go run scripts/backend.go --port 18080
+#        Terminal 2: go run scripts/backend.go --port 18081
+#   3) 启动 sentinel：
+#        go build -o sentinel.exe ./cmd/sentinel
+#        .\sentinel.exe -c bench-sentinel.yaml
+#   4) 压测：
+#        go run scripts/benchmark.go --url http://127.0.0.1:18000/proxy/status/200 \
+#                                    --token bench-token-0001 \
+#                                    --duration 60s --concurrency 200
+#
+# 说明：本文件的账号 / 密码 / Token 均为压测专用假值，仅用于本地复现，
+#       绝不要直接用于任何真实环境（内网 / 生产 / 公网可达实例）。
+# ==========================================================================
+
+server:
+  port: "18000"                 # 压测专用端口，与 8080 默认实例共存
+
+backends:
+  - http://127.0.0.1:18080
+  - http://127.0.0.1:18081
+
+balancer:
+  strategy: round_robin
+
+database:
+  driver: "sqlite"
+  path: "./data/sentinel-bench.db"  # 独立 DB，不污染默认 ./data/sentinel.db
+
+proxy:
+  timeout_seconds: 30
+  max_body_bytes: 10485760     # 10 MB
+  max_upload_bytes: 1073741824 # 1 GB
+  trust_forwarded_headers: false
+
+# ---- 压测专用假账号 / 假密钥（仅本机，不对外） ----
+auth:
+  admin_username: benchadmin
+  admin_password: "benchpass123"
+  jwt_secret: "proxy-sentinel-bench-secret-2026"
+  proxy_tokens:
+    - "bench-token-0001"       # benchmark.go 默认使用的 Token
+
+rate_limit:
+  default_rpm: 0               # ⚠ 压测必须关闭限流，否则 QPS 会被限制
+
+log:
+  level: warn                  # 关闭 debug/info，减少 stdout 开销（这是压测测到 QPS=4443 的关键配置之一）
+  sample_rate: 0.01            # 仅采样 1% 写 DB，模拟真实生产（全量写入时 QPS 会明显下降）
+  retention_days: 1
+  health_retention_days: 1
+  audit_retention_days: 1
+  mask_sensitive: true
+  body_max_bytes: 4096         # 压测请求体都很小，4KB 足够
+
+# secure_cookie: false         # 压测走 HTTP，不需要 Secure Cookie

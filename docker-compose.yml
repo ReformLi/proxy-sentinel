@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  sentinel:
+    build: .
+    image: proxy-sentinel:latest
+    container_name: proxy-sentinel
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/root/data           # SQLite 数据持久化
+      - ./config.yaml:/root/config.yaml:ro
+    environment:
+      - CONFIG_PATH=/root/config.yaml
+      # 敏感配置建议通过环境变量注入（覆盖配置文件）
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-change-me-please}
+      - JWT_SECRET=${JWT_SECRET:-change-this-to-a-random-secret}
+      - BACKEND_URLS=${BACKEND_URLS:-http://127.0.0.1:9001}
+      - LOG_LEVEL=info
+      - SECURE_COOKIE=${SECURE_COOKIE:-false}
