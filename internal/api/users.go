@@ -169,9 +169,11 @@ func (s *Server) resetPassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "更新密码失败: "+err.Error())
 		return
 	}
+	// 密码已变更：清除该用户缓存，其全部旧 JWT 立即失效（强制重新登录）
+	s.webAuth.InvalidateUser(user.Username)
 	auth.Audit(auditCtx(r), s.db, auth.UsernameFromContext(r.Context()),
 		"重置用户密码: "+user.Username, ipFromRequest(r))
-	writeJSON(w, http.StatusOK, map[string]any{"message": "密码已重置"})
+	writeJSON(w, http.StatusOK, map[string]any{"message": "密码已重置（该用户所有会话已失效）"})
 }
 
 type updateRoleRequest struct {
@@ -211,7 +213,9 @@ func (s *Server) updateRole(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "更新角色失败: "+err.Error())
 		return
 	}
+	// 角色已变更：清除该用户缓存，其全部旧 JWT 立即失效（旧令牌中的角色不再可信）
+	s.webAuth.InvalidateUser(user.Username)
 	auth.Audit(auditCtx(r), s.db, auth.UsernameFromContext(r.Context()),
 		"修改用户角色: "+user.Username+" → "+req.Role, ipFromRequest(r))
-	writeJSON(w, http.StatusOK, map[string]any{"message": "角色已更新"})
+	writeJSON(w, http.StatusOK, map[string]any{"message": "角色已更新（该用户所有会话已失效，需重新登录）"})
 }

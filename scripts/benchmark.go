@@ -2,6 +2,9 @@
 // 用法：go run scripts/benchmark.go --url=http://127.0.0.1:18000/proxy/status/200 \
 //                                  --token=bench-token-0001 \
 //                                  --duration=60s --concurrency=200
+//
+//go:build ignore
+
 package main
 
 import (

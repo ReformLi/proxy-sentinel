@@ -12,11 +12,12 @@ import (
 // CookieName JWT 在浏览器中的 Cookie 名称
 const CookieName = "sentinel_token"
 
-// 缓存用户存在性检查结果，避免每请求查 DB
+// 缓存用户存在性与令牌版本检查结果，避免每请求查 DB
 const userCacheTTL = 30 * time.Second
 
 type cacheEntry struct {
 	exists    bool
+	version   int // 查询时刻的 token_version（用于踢出旧 JWT）
 	checkedAt time.Time
 }
 
@@ -81,8 +82,15 @@ func (m *WebAuthMiddleware) Middleware(acceptJSON bool) func(http.Handler) http.
 			if role == "" {
 				role = "admin"
 			}
-			// 验证用户是否仍存在（内存缓存 + 30s TTL）
-			if !m.userExists(r.Context(), claims.Username) {
+			// 验证用户是否仍存在且令牌版本未变（内存缓存 + 30s TTL）：
+			// 密码重置/角色变更会使 token_version+1，旧 JWT 立即失效，强制重新登录
+			exists, version := m.userState(r.Context(), claims.Username)
+			if !exists {
+				m.ClearAuthCookie(w)
+				m.unauthorized(w, r, acceptJSON)
+				return
+			}
+			if version != claims.TokenVersion {
 				m.ClearAuthCookie(w)
 				m.unauthorized(w, r, acceptJSON)
 				return
@@ -94,20 +102,22 @@ func (m *WebAuthMiddleware) Middleware(acceptJSON bool) func(http.Handler) http.
 	}
 }
 
-// userExists 检查用户是否仍存在（30s 内存缓存）
-func (m *WebAuthMiddleware) userExists(ctx context.Context, username string) bool {
+// userState 检查用户是否存在并返回其当前令牌版本（30s 内存缓存）
+func (m *WebAuthMiddleware) userState(ctx context.Context, username string) (bool, int) {
 	if v, ok := m.cache.Load(username); ok {
 		entry := v.(cacheEntry)
 		if time.Since(entry.checkedAt) < userCacheTTL {
-			return entry.exists
+			return entry.exists, entry.version
 		}
 	}
 	exists := false
+	version := 0
 	if u, err := m.db.GetUserByUsername(ctx, username); err == nil && u != nil {
 		exists = true
+		version = u.TokenVersion
 	}
-	m.cache.Store(username, cacheEntry{exists: exists, checkedAt: time.Now()})
-	return exists
+	m.cache.Store(username, cacheEntry{exists: exists, version: version, checkedAt: time.Now()})
+	return exists, version
 }
 
 // InvalidateUser 清除指定用户的缓存（删除用户时调用，立即生效）

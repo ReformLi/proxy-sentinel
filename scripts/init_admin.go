@@ -4,6 +4,9 @@
 //   go run ./scripts/init_admin -username admin -password "new-password"
 //
 // 若不指定参数，则从 config.yaml + 环境变量读取（与主程序相同的配置加载逻辑）。
+//
+//go:build ignore
+
 package main
 
 import (

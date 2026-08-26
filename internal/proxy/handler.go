@@ -7,7 +7,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -194,9 +196,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, req *http.Request, err error) {
+			// 客户端主动断开（context canceled）：后端无责，不标记下线——
+			// 否则高并发下大量客户端取消（弱网/超时放弃）会把健康后端连续"误伤"下线，
+			// 流量集中到剩余后端甚至全量返回 no available backend
+			if errors.Is(err, context.Canceled) {
+				rec.setStatus(499) // nginx 惯例码：client closed request（此时写入已无接收方，仅用于日志统计）
+				return
+			}
 			h.balancer.MarkDown(backend)
 			rec.setStatus(http.StatusBadGateway)
-			writeJSONError(w, http.StatusBadGateway, "backend error: "+err.Error())
+			// 对外统一文案：err 可能含后端内网地址/端口/超时配置，直接回显会泄漏内部拓扑
+			log.Printf("[proxy] backend error: backend=%s path=%s err=%v", backend, req.URL.Path, err)
+			writeJSONError(w, http.StatusBadGateway, "backend unavailable")
 		},
 		Transport: h.transport,
 	}

@@ -10,8 +10,9 @@ import (
 
 // Claims JWT 载荷
 type Claims struct {
-	Username string `json:"username"`
-	Role     string `json:"role"` // admin | viewer
+	Username     string `json:"username"`
+	Role         string `json:"role"`          // admin | viewer
+	TokenVersion int    `json:"token_version"` // 签发时用户的令牌版本；密码/角色变更后 +1，旧令牌随之失效
 	jwt.RegisteredClaims
 }
 
@@ -34,13 +35,14 @@ func NewJWTManager(secret string, expiry time.Duration, secure bool) *JWTManager
 // Secure 是否启用 Secure Cookie
 func (m *JWTManager) Secure() bool { return m.secure }
 
-// Generate 签发 JWT
-func (m *JWTManager) Generate(username, role string) (string, time.Time, error) {
+// Generate 签发 JWT（tokenVersion 为该用户当前的令牌版本，用于后续失效比对）
+func (m *JWTManager) Generate(username, role string, tokenVersion int) (string, time.Time, error) {
 	now := time.Now()
 	expiresAt := now.Add(m.expiry)
 	claims := Claims{
-		Username: username,
-		Role:     role,
+		Username:     username,
+		Role:         role,
+		TokenVersion: tokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),

@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+-- role / token_version 列由程序启动时增量迁移补齐（见 internal/storage/db.go migrate）
+-- token_version：密码/角色变更时 +1，使旧 JWT 立即失效
 
 -- 代理接口 Token 表
 CREATE TABLE IF NOT EXISTS proxy_tokens (

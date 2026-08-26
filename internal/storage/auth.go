@@ -15,6 +15,7 @@ type User struct {
 	Username     string
 	PasswordHash string
 	Role         string
+	TokenVersion int // 令牌版本：密码/角色变更时 +1，使已签发的旧 JWT 立即失效
 	CreatedAt    time.Time
 }
 
@@ -71,9 +72,9 @@ func (db *DB) MigrateLegacyTokens(ctx context.Context) error {
 
 // GetUserByUsername 按用户名查询管理员
 func (db *DB) GetUserByUsername(ctx context.Context, username string) (*User, error) {
-	row := db.QueryRowContext(ctx, `SELECT id, username, password_hash, role, created_at FROM users WHERE username=?`, username)
+	row := db.QueryRowContext(ctx, `SELECT id, username, password_hash, role, token_version, created_at FROM users WHERE username=?`, username)
 	u := &User{}
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.TokenVersion, &u.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -142,15 +143,16 @@ func (db *DB) CreateUser(ctx context.Context, username, passwordHash, role strin
 	return err
 }
 
-// UpdateUserRole 更新用户角色
+// UpdateUserRole 更新用户角色；同时 token_version+1 使旧 JWT 失效（角色变更需重新登录生效）
 func (db *DB) UpdateUserRole(ctx context.Context, id int64, role string) error {
-	_, err := db.ExecContext(ctx, `UPDATE users SET role=? WHERE id=?`, role, id)
+	_, err := db.ExecContext(ctx, `UPDATE users SET role=?, token_version=token_version+1 WHERE id=?`, role, id)
 	return err
 }
 
-// UpdatePasswordHash 更新管理员密码哈希（配置文件中修改密码后重启生效）
+// UpdatePasswordHash 更新管理员密码哈希（配置文件中修改密码后重启生效）；
+// 同时 token_version+1 使该用户全部已签发 JWT 立即失效（改密码即"踢下线"）
 func (db *DB) UpdatePasswordHash(ctx context.Context, username, passwordHash string) error {
-	_, err := db.ExecContext(ctx, `UPDATE users SET password_hash=? WHERE username=?`, passwordHash, username)
+	_, err := db.ExecContext(ctx, `UPDATE users SET password_hash=?, token_version=token_version+1 WHERE username=?`, passwordHash, username)
 	return err
 }
 

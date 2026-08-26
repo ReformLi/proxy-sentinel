@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS users (
   username TEXT UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   role TEXT DEFAULT 'admin',
+  token_version INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -113,6 +114,7 @@ CREATE TABLE IF NOT EXISTS users (
   username VARCHAR(64) UNIQUE NOT NULL,
   password_hash VARCHAR(128) NOT NULL,
   role VARCHAR(16) DEFAULT 'admin',
+  token_version INT NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -182,6 +184,7 @@ CREATE TABLE IF NOT EXISTS users (
   username VARCHAR(64) UNIQUE NOT NULL,
   password_hash VARCHAR(128) NOT NULL,
   role VARCHAR(16) DEFAULT 'admin',
+  token_version INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -350,6 +353,10 @@ func (db *DB) migrate() error {
 		return err
 	}
 	if err := db.addColumnIfMissing("users", "role", "TEXT DEFAULT 'admin'"); err != nil {
+		return err
+	}
+	// token_version：密码/角色变更时 +1，使旧 JWT 立即失效（强制重新登录）
+	if err := db.addColumnIfMissing("users", "token_version", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	// request_id 索引须在补列之后创建

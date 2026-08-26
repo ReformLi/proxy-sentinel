@@ -1,5 +1,8 @@
 // backend.go: 高并发 mock 后端（替代 flask dev server 做压测上游）
 // 用法：go run scripts/backend.go --port 18080   # 另起一个终端 --port 18081
+//
+//go:build ignore
+
 package main
 
 import (
