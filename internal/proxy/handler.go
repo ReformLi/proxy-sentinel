@@ -3,11 +3,14 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -18,6 +21,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"proxy-sentinel/internal/logger"
 	"proxy-sentinel/internal/storage"
@@ -231,7 +235,7 @@ func (h *Handler) writeLog(r *http.Request, reqBody []byte, rec *responseRecorde
 		RequestBody:     truncateString(string(reqBody), h.logBodyMax),
 		Status:          rec.status,
 		ResponseHeaders: headersToJSON(rec.headers),
-		ResponseBody:    rec.body.String(),
+		ResponseBody:    decodeResponseBody(rec.body.String(), rec.headers),
 		Duration:        time.Since(start).Milliseconds(),
 		ClientIP:        client,
 		UserAgent:       r.UserAgent(),
@@ -240,6 +244,89 @@ func (h *Handler) writeLog(r *http.Request, reqBody []byte, rec *responseRecorde
 		RequestID:       requestID,
 		CreatedAt:       start,
 	})
+}
+
+// binaryContentTypes 记录日志时按二进制处理的 Content-Type（存占位符而非原始字节）
+var binaryContentTypes = map[string]struct{}{
+	"image/":                  {},
+	"audio/":                  {},
+	"video/":                  {},
+	"application/octet-stream": {},
+	"application/pdf":         {},
+	"application/zip":         {},
+	"application/gzip":        {},
+	"application/x-protobuf":  {},
+}
+
+// decodeResponseBody 将录制的原始响应体转为可读文本，仅用于日志落库（客户端收到的字节不受影响）。
+// 处理顺序：二进制类型占位 → gzip/deflate 解压 → br 占位 → 非 UTF-8 兜底占位。
+// 客户端显式携带 Accept-Encoding 时 Go transport 会透传压缩字节，日志若不解压就是乱码
+func decodeResponseBody(raw string, header http.Header) string {
+	if raw == "" {
+		return raw
+	}
+
+	ct := strings.ToLower(header.Get("Content-Type"))
+	for prefix := range binaryContentTypes {
+		if strings.HasPrefix(ct, prefix) {
+			return fmt.Sprintf("[binary %s, %d bytes]", header.Get("Content-Type"), len(raw))
+		}
+	}
+
+	switch strings.ToLower(header.Get("Content-Encoding")) {
+	case "gzip":
+		if s, ok := gunzipString(raw); ok {
+			return s
+		}
+		return fmt.Sprintf("[gzip-compressed, %d bytes, undecodable]", len(raw))
+	case "deflate":
+		if s, ok := inflateString(raw); ok {
+			return s
+		}
+		return fmt.Sprintf("[deflate-compressed, %d bytes, undecodable]", len(raw))
+	case "br":
+		// brotli 不在标准库；避免引入依赖，存占位符
+		return fmt.Sprintf("[br-compressed, %d bytes]", len(raw))
+	}
+
+	// 非 UTF-8 文本（如 GBK）：存占位符避免页面乱码
+	if !utf8.ValidString(raw) {
+		return fmt.Sprintf("[non-utf8 body, %d bytes]", len(raw))
+	}
+	return raw
+}
+
+// gunzipString 解压 gzip 压缩的响应体。
+// 录制流可能被日志上限截断：解出前半段也保留（比全丢好），解压彻底失败才返回 false
+func gunzipString(raw string) (string, bool) {
+	zr, err := gzip.NewReader(strings.NewReader(raw))
+	if err != nil {
+		return "", false
+	}
+	defer zr.Close()
+	// 读取上限：解压后可能膨胀，按日志上限的 2 倍截断防内存放大
+	limited := io.LimitReader(zr, 128*1024)
+	b, err := io.ReadAll(limited)
+	if err != nil && len(b) == 0 {
+		// 截断流读取中途报错属正常（gzip 需要尾部校验），已有部分内容则继续使用
+		return "", false
+	}
+	return string(b), true
+}
+
+// inflateString 解压 deflate（zlib 包装）响应体，语义同 gunzipString
+func inflateString(raw string) (string, bool) {
+	zr, err := zlib.NewReader(strings.NewReader(raw))
+	if err != nil {
+		return "", false
+	}
+	defer zr.Close()
+	limited := io.LimitReader(zr, 128*1024)
+	b, err := io.ReadAll(limited)
+	if err != nil && len(b) == 0 {
+		return "", false
+	}
+	return string(b), true
 }
 
 // resolveRequestID 复用入站 X-Request-ID 或生成新 ID（"req-" + 16 位十六进制）
